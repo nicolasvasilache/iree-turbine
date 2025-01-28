@@ -34,19 +34,16 @@ AccT = TypeVar("AccT")
 CustomOpT = TypeVar("CustomOpT", bound="CustomOp")
 PlaceholderT = TypeVar("PlaceholderT", bound="Placeholder")
 
-
 # Stubs to enable type checking of the custom ops:
 # This is currently hand-written and should in future be generated from the custom ops
 
 
-def allocate(
-    shape: tuple[IndexExpr], dtype: DataType, address_space: IndexSymbol
-) -> "Memory":
+def allocate(shape: tuple[IndexExpr], dtype: DataType,
+             address_space: IndexSymbol) -> "Memory":
     ...
 
-def self_index(
-    idx: IndexExpr, dtype: DataType
-) -> "Register":
+
+def self_index(idx: IndexExpr, dtype: DataType) -> "Register":
     ...
 
 
@@ -89,7 +86,8 @@ def reduction(
     ...
 
 
-def register(shape: tuple[IndexExpr, ...], dtype: DataType, value: float) -> "Register":
+def register(shape: tuple[IndexExpr, ...], dtype: DataType,
+             value: float) -> "Register":
     ...
 
 
@@ -98,11 +96,11 @@ def mma(lhs: "Register", rhs: "Register", acc: "Register") -> "Register":
 
 
 def write(
-    register_: "Register",
-    memory: "Memory",
-    elements_per_thread: Optional[IndexExpr | int] = None,
-    mapping: Optional[IndexMapping] = None,
-    mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
+        register_: "Register",
+        memory: "Memory",
+        elements_per_thread: Optional[IndexExpr | int] = None,
+        mapping: Optional[IndexMapping] = None,
+        mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
 ):
     ...
 
@@ -139,15 +137,14 @@ def maximum(lhs: "Register", rhs: "Register") -> "Register":
     ...
 
 
-def broadcast(arg: "Register",
-              target_shape: Optional[IndexExpr | int] = None) -> "Register":
+def broadcast(
+        arg: "Register",
+        target_shape: Optional[Sequence[IndexExpr | int]] = None
+) -> "Register":
     ...
 
 
-def index(
-        arg: "Register",
-        num_indices_from_offset: int = None
-) -> "Register":
+def index(arg: "Register", num_indices_from_offset: int = None) -> "Register":
     ...
 
 
@@ -184,6 +181,7 @@ def reshape(inputs: Sequence["Register"]) -> "Register":
 
 
 def define_op(op_name: str) -> Callable[[T], T]:
+
     def decorator(cls: T) -> T:
         cls.tkw_op_name = op_name
 
@@ -339,7 +337,8 @@ class CustomOp(ABC):
     graph: Optional[fx.Graph] = field(default=None, init=False)
     fx_node: Optional[fx.Node] = field(default=None, init=False)
     tkw_op_name: str = field(default="unknown", init=False)
-    _tracing_function: Optional[Callable[..., Any]] = field(default=None, init=False)
+    _tracing_function: Optional[Callable[..., Any]] = field(default=None,
+                                                            init=False)
 
     @classmethod
     def from_fx_node(cls: Type[CustomOpT], node: fx.Node) -> CustomOpT:
@@ -370,8 +369,7 @@ class CustomOp(ABC):
         # print all variables of the node apart from graph and fx_node
         ignore_list = ["fx_node", "graph"]
         vars_list = [
-            f"{key}={value}"
-            for key, value in vars(self).items()
+            f"{key}={value}" for key, value in vars(self).items()
             if key not in ignore_list and value is not None
         ]
         if hasattr(self.fx_node, "index") and self.fx_node.index:
@@ -379,7 +377,9 @@ class CustomOp(ABC):
         vars_str = ", ".join(vars_list)
         return f"{self.tkw_op_name}({vars_str})"
 
-    def add_to_graph(self, region_graph: RegionGraph, type: Any = None) -> fx.Node:
+    def add_to_graph(self,
+                     region_graph: RegionGraph,
+                     type: Any = None) -> fx.Node:
         arg_list = tuple([value for _, value in vars(self).items()])
         self.graph = region_graph
         self.fx_node = region_graph.create_node(
@@ -413,7 +413,9 @@ class CustomOp(ABC):
         underlying fx.Node consistent.
         """
         inherited_field_count = len(CustomOp.__dataclass_fields__)
-        field_names = [field.name for field in fields(self)[inherited_field_count:]]
+        field_names = [
+            field.name for field in fields(self)[inherited_field_count:]
+        ]
         if isinstance(idx_or_name, str):
             if idx_or_name not in field_names:
                 raise ValueError(f"Field {idx_or_name} not found")
@@ -435,7 +437,9 @@ class CustomOp(ABC):
         """
         Copy core attributes from the current node to the new node.
         """
-        core_attributes = ["index", "vector_shapes", "reduction_dim", "iter_idx"]
+        core_attributes = [
+            "index", "vector_shapes", "reduction_dim", "iter_idx"
+        ]
         for attr_name in core_attributes:
             if hasattr(self.fx_node, attr_name):
                 attr = getattr(self.fx_node, attr_name)
@@ -471,9 +475,8 @@ class CustomOp(ABC):
             new_node = new_node.fx_node
         self.fx_node.replace_all_uses_with(new_node)
 
-    def replace_all_uses_with_except(
-        self, new_node: CustomOp | fx.Node, except_nodes: list[CustomOp]
-    ):
+    def replace_all_uses_with_except(self, new_node: CustomOp | fx.Node,
+                                     except_nodes: list[CustomOp]):
         """Replace all uses of the current node with the new node except for the nodes in except_nodes."""
         for user in self.users:
             if user in except_nodes:
@@ -484,14 +487,9 @@ class CustomOp(ABC):
             for idx in indices:
                 if isinstance(user.node_args[idx], Sequence):
                     sub_idx = user.node_args[idx].index(self)
-                    new_nodes = [
-                        (
-                            user.node_args[idx][x].fx_node
-                            if x != sub_idx
-                            else new_node.fx_node
-                        )
-                        for x in range(len(user.node_args[idx]))
-                    ]
+                    new_nodes = [(user.node_args[idx][x].fx_node
+                                  if x != sub_idx else new_node.fx_node)
+                                 for x in range(len(user.node_args[idx]))]
                     user.update_arg(idx, new_nodes)
                 else:
                     user.update_arg(idx, new_node.fx_node)
@@ -524,11 +522,13 @@ class CustomOp(ABC):
         for i, arg in enumerate(self.fx_node.args):
             if isinstance(arg, fx.Node):
                 custom_args[i] = get_custom(arg)
-            if isinstance(arg, list) and all(isinstance(x, fx.Node) for x in arg):
+            if isinstance(arg, list) and all(
+                    isinstance(x, fx.Node) for x in arg):
                 custom_args[i] = [get_custom(x) for x in arg]
         return custom_args
 
-    def get_node_arg_index(self, arg: CustomOp) -> Optional[CustomOp | list[CustomOp]]:
+    def get_node_arg_index(
+            self, arg: CustomOp) -> Optional[CustomOp | list[CustomOp]]:
         keys = []
         for key, value in self.node_args.items():
             if isinstance(value, Sequence):
@@ -659,8 +659,8 @@ class CustomOp(ABC):
         pass
 
     def transform_index_backwards(
-        self, index: dict[IndexSymbol, IndexSequence], arg: fx.Node
-    ) -> dict[IndexSymbol, IndexSequence]:
+            self, index: dict[IndexSymbol, IndexSequence],
+            arg: fx.Node) -> dict[IndexSymbol, IndexSequence]:
         """
         Transform the index of the node when propagating index backwards, i.e.
         from node to its arguments.
@@ -773,7 +773,8 @@ class Unknown(CustomOp):
 
     def custom_string(self, value_map: dict[str, str]) -> str:
         # print all variables of the node apart from graph and op
-        vars_list = [f"{key}={value}" for key, value in vars(self).items()][:-2]
+        vars_list = [f"{key}={value}"
+                     for key, value in vars(self).items()][:-2]
         vars_str = ", ".join(vars_list)
         return f"unknown: {self.fx_node.name}({vars_str})"
 
@@ -827,14 +828,16 @@ class Placeholder(CustomOp):
 
     def add_to_graph(self, region_graph: RegionGraph) -> fx.Node:
         self.graph = region_graph
-        self.fx_node = region_graph.create_node("placeholder", target=self._name)
+        self.fx_node = region_graph.create_node("placeholder",
+                                                target=self._name)
         self.fx_node.tkw_op = self.__class__
         self.fx_node.tkw_op_name = self.tkw_op_name
         return self.fx_node
 
     def custom_string(self, value_map: dict[str, str]) -> str:
         # print all variables of the node apart from graph and op
-        vars_list = [f"{key}={value}" for key, value in vars(self).items()][:-2]
+        vars_list = [f"{key}={value}"
+                     for key, value in vars(self).items()][:-2]
         vars_str = ", ".join(vars_list)
         return f"{self.tkw_op_name}({vars_str})"
 
@@ -1002,11 +1005,9 @@ class MMA(CustomOp):
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
-        combined_dims = (
-            get_custom(self.lhs).indexing_dims
-            + get_custom(self.rhs).indexing_dims
-            + get_custom(self.acc).indexing_dims
-        )
+        combined_dims = (get_custom(self.lhs).indexing_dims +
+                         get_custom(self.rhs).indexing_dims +
+                         get_custom(self.acc).indexing_dims)
         unique_dims = list(dict.fromkeys(combined_dims))
         return unique_dims
 
@@ -1026,8 +1027,8 @@ class MMA(CustomOp):
         self.type = self.acc_type
 
     def operand_index(
-        self, operand_map: dict[IndexSymbol, int], shape: list[IndexExpr]
-    ) -> dict[IndexSymbol, IndexSequence]:
+            self, operand_map: dict[IndexSymbol, int],
+            shape: list[IndexExpr]) -> dict[IndexSymbol, IndexSequence]:
         indices: dict[IndexSymbol, IndexSequence] = {}
         for dim in shape:
             indices[dim] = self.index[dim].subs(operand_map)
@@ -1116,8 +1117,8 @@ class Read(CustomOp):
             self.index = align_index_vars(self.index, constraints)
 
     def transform_index_backwards(
-        self, index: dict[IndexSymbol, IndexSequence], arg: fx.Node
-    ) -> dict[IndexSymbol, IndexSequence]:
+            self, index: dict[IndexSymbol, IndexSequence],
+            arg: fx.Node) -> dict[IndexSymbol, IndexSequence]:
         """
         Propagate index backwards.
 
@@ -1135,19 +1136,19 @@ class Read(CustomOp):
 
             # This logic assumes that the output mapping is identity.
             subs = {
-                k: index[v] for k, v in zip(iters, self.mapping.output_mapping.keys())
+                k: index[v]
+                for k, v in zip(iters, self.mapping.output_mapping.keys())
             }
             return {
                 k: IndexSequence.from_expr(mapping[k], subs)
-                for k in arg.type.symbolic_shape
-                if k in mapping
+                for k in arg.type.symbolic_shape if k in mapping
             }
 
         return index
 
     def get_derived_indices(
-        self,
-    ) -> list[tuple[dict[IndexSymbol, IndexSequence], fx.Node]]:
+        self, ) -> list[tuple[dict[IndexSymbol, IndexSequence], fx.Node]]:
+
         def transform_idx(arg):
             # Treat zero index as 'not-set' and does't propagate it.
             # TODO: `set_thread_independent_index` currently blindly sets zero
@@ -1156,8 +1157,8 @@ class Read(CustomOp):
             # analysis.
             return {
                 k: v
-                for k, v in self.transform_index_backwards(self.index, arg).items()
-                if v.start != 0
+                for k, v in self.transform_index_backwards(
+                    self.index, arg).items() if v.start != 0
             }
 
         return [(arg, transform_idx(arg)) for arg in self.mapping_dynamic_vals]
@@ -1197,6 +1198,7 @@ class Read(CustomOp):
 
 
 class NestedRegionOp(CustomOp):
+
     def captured_vars(self, graph: fx.Graph) -> list[fx.Node]:
         """
         Nodes that are placeholders and are not iter args are captured vars.
@@ -1204,7 +1206,8 @@ class NestedRegionOp(CustomOp):
         captured_vars = []
         for nested_node in graph.nodes:
             custom = get_custom(nested_node)
-            if isinstance(custom, Placeholder) and not isinstance(custom, IterArg):
+            if isinstance(custom,
+                          Placeholder) and not isinstance(custom, IterArg):
                 captured_vars.append(nested_node)
         return captured_vars
 
@@ -1218,6 +1221,7 @@ class Conditional(NestedRegionOp):
 
     @classmethod
     def handle(cls, graph, *args, **kwargs):
+
         def wrapper(f):
             with graph.subtracer() as subtracer:
                 subgraph_name, implicit_captures = subtracer.trace(f)
@@ -1251,6 +1255,7 @@ class Reduction(NestedRegionOp):
 
     @classmethod
     def handle(cls, graph, *args, **kwargs):
+
         def wrapper(f):
             with graph.subtracer() as subtracer:
                 subgraph_name, implicit_captures = subtracer.trace(f)
@@ -1265,8 +1270,8 @@ class Reduction(NestedRegionOp):
             for nested_node in graph.subgraphs[subgraph_name].nodes:
                 if nested_node.op == "placeholder":
                     if nested_node not in [
-                        var.node
-                        for var in graph.inner_freevars[graph.subgraphs[subgraph_name]]
+                            var.node for var in graph.inner_freevars[
+                                graph.subgraphs[subgraph_name]]
                     ]:
                         nested_node.tkw_op = IterArg
 
@@ -1338,18 +1343,10 @@ class Reduction(NestedRegionOp):
         for node in self.get_root_graph().subgraphs[self.subgraph_name].nodes:
             if isinstance(output := get_custom(node), Output):
                 return_vals = output.return_vals[0]
-                return (
-                    [
-                        (
-                            get_custom(val).acc_index
-                            if isinstance(get_custom(val), MMA)
-                            else val.index
-                        )
-                        for val in return_vals
-                    ]
-                    if isinstance(return_vals, (Sequence))
-                    else return_vals.index
-                )
+                return ([(get_custom(val).acc_index if isinstance(
+                    get_custom(val), MMA) else val.index)
+                         for val in return_vals] if isinstance(
+                             return_vals, (Sequence)) else return_vals.index)
 
     @index.setter
     def index(self, value: Any):
@@ -1408,8 +1405,8 @@ class Write(CustomOp):
             self.index = align_index_vars(self.index, constraints)
 
     def transform_index_backwards(
-        self, index: dict[IndexSymbol, IndexSequence], arg: fx.Node
-    ) -> dict[IndexSymbol, IndexSequence]:
+            self, index: dict[IndexSymbol, IndexSequence],
+            arg: fx.Node) -> dict[IndexSymbol, IndexSequence]:
         """
         Propagate index backwards.
 
@@ -1427,24 +1424,24 @@ class Write(CustomOp):
 
             # This logic assumes that the input mapping is identity.
             subs = {
-                k: index[v] for k, v in zip(iters, self.mapping.input_mapping.keys())
+                k: index[v]
+                for k, v in zip(iters, self.mapping.input_mapping.keys())
             }
             return {
                 k: IndexSequence.from_expr(mapping[k], subs)
-                for k in arg.type.symbolic_shape
-                if k in mapping
+                for k in arg.type.symbolic_shape if k in mapping
             }
 
         return index
 
     def get_derived_indices(
-        self,
-    ) -> list[tuple[dict[IndexSymbol, IndexSequence], fx.Node]]:
+        self, ) -> list[tuple[dict[IndexSymbol, IndexSequence], fx.Node]]:
+
         def transform_idx(arg):
             return {
                 k: v
-                for k, v in self.transform_index_backwards(self.index, arg).items()
-                if v.start != 0
+                for k, v in self.transform_index_backwards(
+                    self.index, arg).items() if v.start != 0
             }
 
         return [(arg, transform_idx(arg)) for arg in self.mapping_dynamic_vals]
@@ -1529,9 +1526,8 @@ class GetResult(CustomOp):
     @property
     def indexing_dims(self) -> list[IndexExpr]:
         has_multiple_value = lambda x: all(isinstance(el, list) for el in x)
-        is_valid_indexing_dim = lambda x: isinstance(src_indexing, list) and all(
-            isinstance(el, IndexExpr) for el in x
-        )
+        is_valid_indexing_dim = lambda x: isinstance(
+            src_indexing, list) and all(isinstance(el, IndexExpr) for el in x)
         src_indexing = get_custom(self.value).indexing_dims
         if has_multiple_value(src_indexing):
             assert self.res_idx <= len(src_indexing) - 1
@@ -1548,8 +1544,7 @@ class GetResult(CustomOp):
         if not isinstance(custom, Reduction):
             return custom.index
         assert isinstance(custom_index, Sequence) and self.res_idx < len(
-            custom.indexing_dims
-        )
+            custom.indexing_dims)
         return custom.index[self.res_idx]
 
     @index.setter
@@ -1585,7 +1580,9 @@ class Extract(CustomOp):
 
         # Typically fastest dim is the last dimension,
         # If non-unit dim exists => non-unit dim is fastest dim.
-        non_unit_dim = [k for k, v in self.register_.index.items() if v.size != 1]
+        non_unit_dim = [
+            k for k, v in self.register_.index.items() if v.size != 1
+        ]
         if len(non_unit_dim) > 1:
             raise NotImplementedError(
                 f"NYI: Extract only support 1 non-unit dim, but found: {len(non_unit_dim)}"
@@ -1614,9 +1611,8 @@ class ExtractSlice(CustomOp):
         offset_rank = len(self.offset)
         size_rank = len(self.size)
         stride_rank = len(self.stride)
-        assert (
-            offset_rank == size_rank == stride_rank
-        ), "Expected offset, size, and stride to have same rank."
+        assert (offset_rank == size_rank == stride_rank
+                ), "Expected offset, size, and stride to have same rank."
         return size_rank
 
 
@@ -1631,11 +1627,7 @@ class Broadcast(CustomOp, ABC):
     """
 
     arg: fx.Node
-    target_type: Sequence[IndexSymbol] = None
-
-    @property
-    def target_shape(self):
-        return self.target_type.symbolic_shape
+    target_shape: Sequence[IndexSymbol] = None
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -1684,17 +1676,18 @@ class ReduceOp(CustomOp, ABC):
             src_types = [get_custom(arg).type for arg in self.arg]
             ref_shape = src_types[0].symbolic_shape
             ref_dtype = src_types[0].dtype
-            if not all(
-                src_type.symbolic_shape == ref_shape and src_type.dtype == ref_dtype
-                for src_type in src_types
-            ):
+            if not all(src_type.symbolic_shape == ref_shape
+                       and src_type.dtype == ref_dtype
+                       for src_type in src_types):
                 raise NotImplementedError(
                     "NYI: Only support case where all inputs to ReduceOp to have same type."
                 )
             src_type = src_types[0]
         else:
             src_type = get_custom(self.arg).type
-        reduced_dims = [dims for dims in src_type.symbolic_shape if dims != self.dim]
+        reduced_dims = [
+            dims for dims in src_type.symbolic_shape if dims != self.dim
+        ]
         dst_type = Register[(*reduced_dims, src_type.dtype)]
         self.type = dst_type
 
@@ -1702,8 +1695,7 @@ class ReduceOp(CustomOp, ABC):
     def num_reduction_dims(self) -> int:
         if self.dim is None:
             raise NotImplementedError(
-                "Currently do not support ReduceOp with no dims specified."
-            )
+                "Currently do not support ReduceOp with no dims specified.")
         if isinstance(self.dim, Sequence):
             return len(self.dim)
         else:
@@ -1790,18 +1782,18 @@ class Permute(CustomOp, ABC):
         custom_src = get_custom(self.arg)
         src_shape = custom_src.type.symbolic_shape
         src_to_target = {
-            src: self.target_shape[src_shape.index(src)] for src in src_shape
+            src: self.target_shape[src_shape.index(src)]
+            for src in src_shape
         }
         permuted_index = {
             k: IndexSequence(v.start, v.size, index[src_to_target[k]].stride)
-            for k, v in index.items()
-            if k in src_shape
+            for k, v in index.items() if k in src_shape
         }
         return permuted_index
 
 
 def _to_sequence(input: Any | Sequence[Any]) -> Sequence[Any]:
-    return input if isinstance(input, Sequence) else (input,)
+    return input if isinstance(input, Sequence) else (input, )
 
 
 @define_op("reshape")
