@@ -110,36 +110,43 @@ def get_vanilla_attention_kernel(shape: AttentionShape, mfma_variant: MMAType,
             q_reg = tkw.read(q, elements_per_thread=LOAD_ELEMS_PER_THREAD_QK)
             k_reg = tkw.read(k, elements_per_thread=LOAD_ELEMS_PER_THREAD_QK)
             inner_acc = tkw.mma(k_reg, q_reg, imm_reg, mfma_variant[0])
+            x_j = tkw.permute(inner_acc, target_shape=[B, M, K2])
 
             # T5 RPE adds attention bias pre softmax. When fusing into flash
             # attention variant, add before the max and the partial softmax.
 
-            # should be e.g. vector<4xindex>
             # q: tkl.Memory[B, M, K1, GLOBAL_ADDRESS_SPACE, tkl.f16],
-            i = tkw.self_index(M, tkl.i64)
+            i = tkw.broadcast(tkw.self_index(M, tkl.i64), [K2])
+            # assumption: this distributes does to vector<4>
             # should be e.g. vector<4xindex>
             # v: tkl.Memory[B, N, K2, GLOBAL_ADDRESS_SPACE, tkl.f16],
+            # assumption: this distributes does to vector<8>
             j = tkw.self_index(K2, tkl.i64)
-            # fails with BinaryPyOp requires lhs and rhs shape to be at least broadcastable. got (M,) vs (K2,)
-            idx = i - j
 
-            # # should be e.g. vector<4xi1>
+            # TODO: in yesterday's AMD call, it was suggested the following will
+            # be easier to get running quickly than tkw.apply_expr
+            idx1 = idx >= 0
+            idx2 = idx < MAX_CONTEXT_LENGTH
+            cond = idx1 * idx2
+            # should be e.g. vector<4xi1>
             # cond = tkw.apply_expr(
             #     i - j, lambda a: 1 if a >= 0 and a < MAX_CONTEXT_LENGTH else 0)
-            # # may need adjustements if we need to distinguish between min and max
-            # # buckets, currently clips to 0.
-            # # should be e.g. vector<4xindex>
+            # Note: may need adjustements if we need to distinguish between min and max
+            # buckets, currently clips to 0.
+            # should be e.g. vector<4xindex>
             # idx = (i - j) * tkw.cast(cond, tkl.i64)
+            # Poor man's cond avoidance ...
+            idx = i - j
 
-            # # should be e.g. vector<4xf32>
+            # TODO: tkw.read_indirect can actually be obtained using 
+            # tkw.IndexMapping with an OFFSET.
+            # See prefill_attention.py line 95.
             # rpe_reg = tkw.read_indirect(
             #     rpe, idx, elements_per_thread=LOAD_ELEMS_PER_THREAD_QK)
-            # # should be e.g. vector<4xf32>
             # inner_acc = inner_acc + rpe_reg
-
+            # Poor man's no cond available.
             inner_acc = inner_acc + tkw.cast(idx, tkl.f32)
 
-            x_j = tkw.permute(inner_acc, target_shape=[B, M, K2])
             m_j = tkw.max(x_j, partial_max, dim=K2)
             e_delta_max = tkw.exp2(partial_max - m_j)
             e_delta = tkw.exp2(x_j - m_j)

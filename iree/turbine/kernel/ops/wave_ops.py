@@ -722,7 +722,7 @@ class BinaryPyOp(CustomOp, ABC):
         if lhs_dim_set.isdisjoint(rhs_dim_set):
             raise ValueError(
                 "BinaryPyOp requires lhs and rhs shape to be at least broadcastable."
-            )
+                f" got {lhs_type.symbolic_shape} vs {rhs_type.symbolic_shape}")
         broadcasted_type = lhs_type if lhs_dim_set > rhs_dim_set else rhs_type
         self.type = broadcasted_type
 

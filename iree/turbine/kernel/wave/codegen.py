@@ -612,10 +612,8 @@ def handle_self_index(emitter: WaveEmitter, node: fx.Node):
 
     element_type = IrType.parse(dtype.ir_type_asm())
     index_type = IrType.parse("index")
-    i64 = IrType.parse("i64")
     vector_shape = cast_py_literal(emitter, [size])
     vector_index_type = VectorType.get(vector_shape, index_type)
-    vector_i64_type = VectorType.get(vector_shape, i64)
     vector_type = VectorType.get(vector_shape, element_type)
 
     step = vector_d.step(vector_index_type)
@@ -624,10 +622,9 @@ def handle_self_index(emitter: WaveEmitter, node: fx.Node):
     scaled = arith_d.MulIOp(step, stride_vec)
     offset = vector_d.splat(vector_index_type, start)
     shifted = arith_d.AddIOp(scaled, offset)
-    casted_i = arith_d.IndexCastOp(vector_i64_type, shifted)
-    casted_f = arith_d.UIToFPOp(vector_type, casted_i).result
+    casted_i = arith_d.IndexCastOp(vector_type, shifted).result
 
-    emitter.bind_node_proxy(node, IRProxyValue(casted_f))
+    emitter.bind_node_proxy(node, IRProxyValue(casted_i))
 
 
 @handle_op(register)
