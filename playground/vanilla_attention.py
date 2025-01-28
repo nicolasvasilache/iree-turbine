@@ -8,9 +8,7 @@ import torch
 from iree.turbine.kernel.gen import TestLaunchContext
 from iree.turbine.kernel.wave.constraints import MMAType
 from iree.turbine.kernel.wave.templates.attention_common import AttentionShape
-from iree.turbine.kernel.wave.templates.vanilla_attention import get_vanilla_attention_kernel
-
-
+from vanilla_attention_template import get_vanilla_attention_kernel
 
 # num_query_heads, num_kv_heads, head_size, head_size_kv
 shape = AttentionShape(1, 128, 8, 64)
@@ -36,5 +34,7 @@ with TestLaunchContext(
     q = torch.randn(vB, vM, vK1, dtype=torch.float16)
     k = torch.randn(vB, vK2, vK1, dtype=torch.float16)
     v = torch.randn(vB, vN, vK2, dtype=torch.float16)
+    # Applied pre-softmax on the MMA'ed result so f32.
+    rpe = torch.randn(vB, vK2, vM, dtype=torch.float32)
     output = torch.zeros(vB, vM, vN, dtype=torch.float32)
-    print(base_attention(q, k, v, output).module_op)
+    print(base_attention(q, k, v, rpe, output).module_op)

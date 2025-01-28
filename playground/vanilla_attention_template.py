@@ -16,9 +16,8 @@ from iree.turbine.kernel.wave.templates.attention_common import AttentionShape
 from dataclasses import dataclass
 
 
-def get_vanilla_attention_kernel(
-    shape: AttentionShape, mfma_variant: MMAType, dynamic_dims: bool
-):
+def get_vanilla_attention_kernel(shape: AttentionShape, mfma_variant: MMAType,
+                                 dynamic_dims: bool):
     # Input sizes
     B = tkl.sym.B
     M = tkl.sym.M
@@ -36,9 +35,13 @@ def get_vanilla_attention_kernel(
     LOAD_ELEMS_PER_THREAD_QK = index_symbol("LOAD_ELEMS_PER_THREAD_QK")
     LOAD_ELEMS_PER_THREAD_PV = index_symbol("LOAD_ELEMS_PER_THREAD_PV")
     STORE_ELEMS_PER_THREAD = tkl.sym.STORE_ELEMS_PER_THREAD
+    # RPE
+    MAX_CONTEXT_LENGTH = tkl.sym.MAX_CONTEXT_LENGTH
 
     # Expose user-constraints
-    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints: list[tkw.Constraint] = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0)
+    ]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.WorkgroupConstraint(B, BLOCK_B, 2)]
     constraints += [tkw.TilingConstraint(K2, BLOCK_K2)]
@@ -57,7 +60,11 @@ def get_vanilla_attention_kernel(
             threads_per_wave=64,
             waves_per_block=(4, 1, 1),
             mma_type=mfma_variant[1],
-            vector_shapes={B: 0, M: Mvec, N: Nvec},
+            vector_shapes={
+                B: 0,
+                M: Mvec,
+                N: Nvec
+            },
         )
     ]
 
@@ -67,20 +74,29 @@ def get_vanilla_attention_kernel(
     i = tkw.IndexMapping.iterator(0)
     j = tkw.IndexMapping.iterator(1)
     k = tkw.IndexMapping.iterator(2)
-    mapping = tkw.IndexMapping(
-        num_iterators=3, inputs={B: i, N: j, M: k}, outputs={B: i, M: k, N: j}
-    )
+    mapping = tkw.IndexMapping(num_iterators=3,
+                               inputs={
+                                   B: i,
+                                   N: j,
+                                   M: k
+                               },
+                               outputs={
+                                   B: i,
+                                   M: k,
+                                   N: j
+                               })
 
     @tkw.wave(constraints)
     def base_attention(
         q: tkl.Memory[B, M, K1, GLOBAL_ADDRESS_SPACE, tkl.f16],
         k: tkl.Memory[B, K2, K1, GLOBAL_ADDRESS_SPACE, tkl.f16],
         v: tkl.Memory[B, N, K2, GLOBAL_ADDRESS_SPACE, tkl.f16],
+        rpe: tkl.Memory[MAX_CONTEXT_LENGTH, GLOBAL_ADDRESS_SPACE, tkl.f32],
         c: tkl.Memory[B, M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
     ):
-        c_reg = tkl.Register[B, N, M, tkl.f32](0.0)
-        init_sum = tkl.Register[B, M, tkl.f32](0.0)
         init_max = tkl.Register[B, M, tkl.f32](-1e6)
+        init_sum = tkl.Register[B, M, tkl.f32](0.0)
+        c_reg = tkl.Register[B, N, M, tkl.f32](0.0)
 
         # This microkernel encodes the fact that if the reduction
         # dimension were tiled, then we would need to materialize a loop.
@@ -94,6 +110,35 @@ def get_vanilla_attention_kernel(
             q_reg = tkw.read(q, elements_per_thread=LOAD_ELEMS_PER_THREAD_QK)
             k_reg = tkw.read(k, elements_per_thread=LOAD_ELEMS_PER_THREAD_QK)
             inner_acc = tkw.mma(k_reg, q_reg, imm_reg, mfma_variant[0])
+
+            # T5 RPE adds attention bias pre softmax. When fusing into flash
+            # attention variant, add before the max and the partial softmax.
+
+            # should be e.g. vector<4xindex>
+            # q: tkl.Memory[B, M, K1, GLOBAL_ADDRESS_SPACE, tkl.f16],
+            i = tkw.self_index(M, tkl.i64)
+            # should be e.g. vector<4xindex>
+            # v: tkl.Memory[B, N, K2, GLOBAL_ADDRESS_SPACE, tkl.f16],
+            j = tkw.self_index(K2, tkl.i64)
+            # fails with BinaryPyOp requires lhs and rhs shape to be at least broadcastable. got (M,) vs (K2,)
+            idx = i - j
+
+            # # should be e.g. vector<4xi1>
+            # cond = tkw.apply_expr(
+            #     i - j, lambda a: 1 if a >= 0 and a < MAX_CONTEXT_LENGTH else 0)
+            # # may need adjustements if we need to distinguish between min and max
+            # # buckets, currently clips to 0.
+            # # should be e.g. vector<4xindex>
+            # idx = (i - j) * tkw.cast(cond, tkl.i64)
+
+            # # should be e.g. vector<4xf32>
+            # rpe_reg = tkw.read_indirect(
+            #     rpe, idx, elements_per_thread=LOAD_ELEMS_PER_THREAD_QK)
+            # # should be e.g. vector<4xf32>
+            # inner_acc = inner_acc + rpe_reg
+
+            inner_acc = inner_acc + tkw.cast(idx, tkl.f32)
+
             x_j = tkw.permute(inner_acc, target_shape=[B, M, K2])
             m_j = tkw.max(x_j, partial_max, dim=K2)
             e_delta_max = tkw.exp2(partial_max - m_j)
@@ -110,13 +155,19 @@ def get_vanilla_attention_kernel(
         res_max, res_sum, res_mm = repeat
         reciprocal_sum = tkw.reciprocal(res_sum)
         res = res_mm * reciprocal_sum
-        tkw.write(res, c, mapping=mapping, elements_per_thread=STORE_ELEMS_PER_THREAD)
+        tkw.write(res,
+                  c,
+                  mapping=mapping,
+                  elements_per_thread=STORE_ELEMS_PER_THREAD)
 
     hyperparams = {
         ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-        LOAD_ELEMS_PER_THREAD_QK: get_mfma_load_elems_per_thread(mfma_variant[0]),
-        LOAD_ELEMS_PER_THREAD_PV: get_mfma_load_elems_per_thread(mfma_variant[1]),
-        STORE_ELEMS_PER_THREAD: get_mfma_store_elems_per_thread(mfma_variant[1]),
+        LOAD_ELEMS_PER_THREAD_QK:
+        get_mfma_load_elems_per_thread(mfma_variant[0]),
+        LOAD_ELEMS_PER_THREAD_PV:
+        get_mfma_load_elems_per_thread(mfma_variant[1]),
+        STORE_ELEMS_PER_THREAD:
+        get_mfma_store_elems_per_thread(mfma_variant[1]),
         BLOCK_B: 1,
         BLOCK_M: 128,
         BLOCK_N: 64,
@@ -124,7 +175,7 @@ def get_vanilla_attention_kernel(
         B: shape.num_query_heads,
         M: int(shape.query_seq_len),
         N: shape.head_size_kv,
-        K1: shape.head_size, # embedding dimension
+        K1: shape.head_size,
         K2: int(shape.kv_seq_len),
     }
 

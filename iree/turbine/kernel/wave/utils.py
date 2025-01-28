@@ -313,6 +313,7 @@ def get_mma_dimensional_mapping(
         lhs_shape = custom.lhs_type.symbolic_shape
         rhs_shape = custom.rhs_type.symbolic_shape
         acc_shape = custom.acc_type.symbolic_shape
+        print(lhs_shape, rhs_shape, acc_shape)
         k = ((set(lhs_shape) & set(rhs_shape)) - set(acc_shape)).pop()
 
         if custom not in mapping:

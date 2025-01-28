@@ -1117,7 +1117,9 @@ def handle_binary_op(op):
             rhs = cast_py_value(emitter, rhs)
 
             if lhs.ir_value.type != rhs.ir_value.type:
-                raise ValidationError("Expected lhs and rhs to have same type.")
+                raise ValidationError(
+                    "Expected lhs and rhs to have same type."
+                    f" Got: {lhs.ir_value.type} vs {rhs.ir_value.type}")
 
             lhs = lhs.ir_value
             rhs = rhs.ir_value

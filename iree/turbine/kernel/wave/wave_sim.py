@@ -47,6 +47,7 @@ def wave_sim(constraints: Optional[list[Constraint]] = None):
                 args_handler(args, subs)
 
             new_func = _resolve_symbols(f, subs)
+            print(new_func)
             try:
                 return new_func(*args)
             finally:

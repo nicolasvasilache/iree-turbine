@@ -134,8 +134,14 @@ def maximum(lhs: "Register", rhs: "Register") -> "Register":
     ...
 
 
-def broadcast(
-    arg: "Register", target_shape: Optional[IndexExpr | int] = None
+def broadcast(arg: "Register",
+              target_shape: Optional[IndexExpr | int] = None) -> "Register":
+    ...
+
+
+def index(
+        arg: "Register",
+        num_indices_from_offset: int = None
 ) -> "Register":
     ...
 
