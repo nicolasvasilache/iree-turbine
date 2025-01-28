@@ -29,6 +29,7 @@ from .utils import (
     canonicalize_module,
     compile_to_vmfb,
     invoke_vmfb,
+    print_trace,
     safe_subs,
     remove_chained_getresult,
     remove_chained_extractslice,
@@ -317,6 +318,9 @@ class LaunchableWave(Launchable):
         # Trace the function.
         graph = self._trace()
 
+        print(
+            f"\n\n\nStart induction vars, reductions and wave/symbolic/workgroup constraints:"
+        )
         initialize_iter_args(graph)
         self.create_induction_vars(graph)
         self.initialize_wave_constraints(graph)
@@ -326,43 +330,89 @@ class LaunchableWave(Launchable):
 
         idxc = IndexingContext.current()
         idxc.finalize()
+        print(
+            f"After induction vars, reductions and wave/symbolic/workgroup constraints:"
+        )
+        print_trace(graph)
 
         # Initialize Vector shapes
         self.hardware_constraints[0].subs_vector_shapes(idxc.subs)
-
         # Do type inference.
+        print(f"\n\n\nStart infer_types:")
         infer_types(graph)
+        print(f"After infer_types:")
+        print_trace(graph)
 
         # Promote the placeholders to the appropriate address space.
+        print(f"\n\n\nStart promote_placeholders:")
         promote_placeholders(graph, self.constraints)
+        print(f"After promote_placeholders:")
+        print_trace(graph)
 
         # Set indices.
+        # NTV note: goes through def get_custom(node: fx.Node) -> "CustomOp":
+        # Example before / after:
+        # register(shape=(M, N), dtype=f32, value=0.0)
+        # register(shape=(M, N), dtype=f32, value=0.0, index={
+        #           M: $WG0*BLOCK_M + BLOCK_M*floor($T0/64)/2 : 1 : 1,
+        #           N: $T1*BLOCK_N/2 + $WG1*BLOCK_N : 1 : 1
+        #          })
+        print(f"\n\n\nStart set_node_indices:")
         set_node_indices(graph, self.constraints)
+        print(f"After set_node_indices:")
+        print_trace(graph)
 
         # Expansion
+        print(f"\n\n\nStart expand_graph:")
         expand_graph(graph, self.constraints)
+        print(f"After expand_graph:")
+        print_trace(graph)
+        # exit()
 
         # Set post expansion indices.
+        print(f"\n\n\nStart set_post_expansion_indices:")
         set_post_expansion_indices(graph, self.constraints)
+        print(f"After set_post_expansion_indices:")
+        print_trace(graph)
+        # exit()
 
         # Clean up chains of GetResults
+        print(f"\n\n\nStart remove_chained_getresult:")
         remove_chained_getresult(graph)
+        print(f"After remove_chained_getresult:")
+        print_trace(graph)
+        # exit()
 
         # Optimizations.
-        decompose_vmma_ops(graph, self.constraints)
+        print(f"\n\n\nStart Optimizations:")
         hoist_loop_invariant_ops(graph, self.constraints)
         minimize_global_loads(graph, self.constraints)
+        print(f"After Optimizations:")
+        print_trace(graph)
+        # exit()
 
         # Apply shared memory indexing corrections.
+        print(f"\n\n\nStart apply_shared_memory_indexing_corrections:")
         apply_shared_memory_indexing_corrections(graph, self.constraints)
 
+        print(f"After apply_shared_memory_indexing_corrections:")
+        print_trace(graph)
+
         # Partition strided operators.
+        print(f"\n\n\nStart Partition strided operators:")
         partition_ops_with_gpr_offsets(graph, self.constraints)
         partition_strided_operators(graph, self.constraints)
         remove_chained_extractslice(graph)
+        print(f"After Partition strided operators:")
+        print_trace(graph)
 
         # Decompose reduce Ops.
+        print(f"\n\n\nStart decompose_reduce_ops:")
         decompose_reduce_ops(graph, self.constraints, idxc.subs)
+
+        print(f"After decompose_reduce_ops:")
+        print_trace(graph)
+        # exit()
 
         # Schedule the reduction ops.
         # Scheduling should always be used with use_scheduling_barriers=True,
@@ -388,7 +438,9 @@ class LaunchableWave(Launchable):
         # Determine grid shape.
         self.grid_type.dims = [1, 1, 1]
         max_workgroup_dim = 2
-        aliases = [x.source for x in self.constraints if isinstance(x, SymbolicAlias)]
+        aliases = [
+            x.source for x in self.constraints if isinstance(x, SymbolicAlias)
+        ]
         for constraint in self.workgroup_constraints:
             if constraint.dim in aliases:
                 continue

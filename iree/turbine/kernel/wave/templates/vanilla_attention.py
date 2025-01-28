@@ -12,7 +12,7 @@ from iree.turbine.kernel.wave.utils import (
     get_mfma_load_elems_per_thread,
     get_mfma_store_elems_per_thread,
 )
-from .attention_common import AttentionShape
+from iree.turbine.kernel.wave.templates.attention_common import AttentionShape
 from dataclasses import dataclass
 
 
