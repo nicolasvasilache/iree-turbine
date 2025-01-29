@@ -939,7 +939,8 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
 
     assert (
         tuple(insert_type.shape) == vector_shape
-    ), f"Shape doesn't match: {tuple(insert_type.shape)} and {(vector_shape)}"
+    ), f"Shape doesn't match: {tuple(insert_type.shape)} and {(vector_shape)}" + \
+    f" in register {register} and elements_per_thread {elements_per_thread}"
 
     if not hasattr(node, "index"):
         raise ValidationError("codegen expected write to have index attr.")

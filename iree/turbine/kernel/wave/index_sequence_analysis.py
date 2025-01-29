@@ -487,10 +487,12 @@ def set_thread_independent_index(
         index_seq = None
         for constraint in constraints:
             if constraint.dim == dim:
+                print(f"\tstep constraint {constraint}")
                 if index_seq is None:
                     index_seq = constraint.apply()
                 else:
                     index_seq.start += constraint.apply().start
+                print(f"\tstep index_seq {index_seq}")
 
         if index_seq is not None:
             index.update({dim: index_seq})
