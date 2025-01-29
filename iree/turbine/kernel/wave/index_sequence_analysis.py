@@ -41,6 +41,7 @@ from .utils import (
     get_inputs,
     get_users,
     get_largest_index_and_size,
+    print_trace,
 )
 import torch.fx as fx
 import numpy as np
@@ -360,10 +361,19 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
 
 
 def set_node_indices(trace: CapturedTrace, constraints: list[Constraint]):
+    print("get_mma_dimensional_mapping")
     mma_index = get_mma_dimensional_mapping(trace, get_hardware_constraint(constraints))
+    print_trace(trace)
+    print("set_thread_independent_index")
     trace.walk(partial(set_thread_independent_index, constraints))
+    print_trace(trace)
+    print("set_thread_dependent_index")
     set_thread_dependent_index(constraints, mma_index, trace)
+    print_trace(trace)
+    print("set_derived_index")
     set_derived_index(trace)
+    print_trace(trace)
+    # exit()
     resolve_thread_shapes(trace, constraints)
     verify_nodes(trace, constraints)
 
@@ -585,12 +595,14 @@ def combine_indices(
     which make the index sequence (access pattern) thread specific. These are
     added to the thread independent index which is obtained from the constraints.
     """
+    print(f"combine {thread_independent_index} with {thread_dependent_index}")
     combined_index = {k: v for k, v in thread_independent_index.items()}
     for k in combined_index:
         if k in thread_dependent_index:
             combined_index[k].start += thread_dependent_index[k].start
             combined_index[k].size = thread_dependent_index[k].size
             combined_index[k].stride = thread_dependent_index[k].stride
+    print(f"\t-> combined {combined_index}")
     return combined_index
 
 

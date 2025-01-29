@@ -500,7 +500,7 @@ def _inplace_invoke(vm_context, device, entry_function, inputs, outputs, dynamic
         else:
             raise ValueError(f"Unsupported input type: {type(input)}")
     for output in outputs:
-        if isinstance(input, torch.Tensor):
+        if isinstance(output, torch.Tensor):
             push_tensor_to_arg_list(output)
         else:
             raise ValueError(f"Unsupported output type: {type(output)}")
@@ -544,6 +544,7 @@ def get_device_uuid(input_tensors: list[torch.Tensor]) -> tuple[int, str]:
     if len(set(device_list)) != 1:
         raise ValueError(f"Found multiple device on input tensors:{set(device_list)}")
     device = device_list[0]
+    print(device_list)
     if device.type != "cuda":
         raise ValueError("Expected all argument tensors to be in GPU.")
     uuid = str(torch.cuda.get_device_properties(device).uuid)
@@ -622,10 +623,18 @@ def invoke_vmfb(
     if not (run or run_bench):
         return
 
-    if inplace:
-        # Select device as the GPU, where input tensors are coming from.
-        device_uuid = get_device_uuid(kernel_inputs + kernel_outputs)
-        device = f"{device}://GPU-{device_uuid}"
+    # TODO: the following crashes with:
+    #
+    # File "/home/nico/dev/iree-turbine/iree/turbine/kernel/wave/utils.py",
+    #   line 550, in get_device_uuid
+    # uuid = str(torch.cuda.get_device_properties(device).uuid)
+    # AttributeError: 'torch._C._CudaDeviceProperties' object has no attribute
+    # 'uuid'. Hack it out for now.
+    #
+    # if inplace:
+    #     # Select device as the GPU, where input tensors are coming from.
+    #     device_uuid = get_device_uuid(kernel_inputs + kernel_outputs)
+    #     device = f"{device}://GPU-{device_uuid}"
     rt_config = rt.Config(device)
     device = rt_config.device
     vm_instance = rt_config.vm_instance

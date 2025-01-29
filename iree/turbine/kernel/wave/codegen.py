@@ -1526,7 +1526,7 @@ def handle_broadcast(emitter: WaveEmitter, node: fx.Node):
     if not VectorType.isinstance(vector_type):
         raise NotImplementedError("Scalar src is not implemented yet for shuffleOp.")
     assert vector_type.rank == 1
-    assert vector_type.shape[0] == 1
+    assert vector_type.shape[0] == 1, f"expected vector_type.shape[0] == 1 but got {vector_type}"
 
     # Extract and Splat
     # If by chance broadcast size  matches current size, we can return src.
