@@ -25,6 +25,7 @@ from ..ops.wave_ops import (
 from .constraints import (
     Constraint,
     HardwareConstraint,
+    WaveConstraint,
     WorkgroupConstraint,
 )
 from .assumptions import Assumption
@@ -34,6 +35,7 @@ from .._support.indexing import IndexSymbol, IndexSequence
 from ..lang.global_symbols import *
 from .utils import (
     all_equal,
+    print_trace,
     simplify_index,
     get_mma_dimensional_mapping,
     get_hardware_constraint,
@@ -361,10 +363,22 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
 
 def set_node_indices(trace: CapturedTrace, constraints: list[Constraint]):
     mma_index = get_mma_dimensional_mapping(trace, get_hardware_constraint(constraints))
+    print(f"\nMMA index / mapping: {mma_index}")
+    print_trace(trace)
+    print(f"\nset_thread_independent_index")
+    # Why does `set_thread_independent_index` use WaveConstraints ?
+    # WaveConstraints results in IndexSequence such as: B: $T1*BLOCK_B : 1 : 1 ..
     trace.walk(partial(set_thread_independent_index, constraints))
+    print_trace(trace)
+    print(f"\nset_thread_dependent_index")
     set_thread_dependent_index(constraints, mma_index, trace)
+    print_trace(trace)
+    print(f"\nset_derived_index")
     set_derived_index(trace)
+    print_trace(trace)
+    print(f"\nsresolve_thread_shapes")
     resolve_thread_shapes(trace, constraints)
+    print_trace(trace)
     verify_nodes(trace, constraints)
 
 
@@ -462,6 +476,7 @@ def set_thread_independent_index(
     Set the index of the node based on all constraints except the hardware constraint.
     """
     custom = get_custom(node)
+    print(f"set_thread_independent_index on node: {node} with custom {custom}")
     if isinstance(custom, (Reduction, Placeholder)) and not isinstance(custom, IterArg):
         return
 
@@ -476,6 +491,8 @@ def set_thread_independent_index(
     for dim in custom.indexing_dims:
         index_seq = None
         for constraint in constraints:
+            if isinstance(constraint, WaveConstraint):
+                continue
             if constraint.dim == dim:
                 if index_seq is None:
                     index_seq = constraint.apply()
@@ -488,6 +505,7 @@ def set_thread_independent_index(
             index.update({dim: IndexSequence(0, 1, 1)})
 
     custom.index = index
+    print(f"update custom {custom}")
 
 
 def specialize_index(
@@ -540,10 +558,11 @@ def populate_mma_sources(
     ]
 
 
-def populate_non_mma_sources(
+def populate_thread_dependent_non_mma_sources(
     node: Read | Write,
     hardware_constraint: HardwareConstraint,
     workgroup_constraints: list[WorkgroupConstraint],
+    wave_constraints: list[WaveConstraint],
 ):
     """
     Initialize the sources with the read and/or write nodes
@@ -563,16 +582,22 @@ def populate_non_mma_sources(
             node.indexing_dims, hardware_constraint.vector_shapes, dim
         )
         wg_constraint = [x for x in workgroup_constraints if x.dim == dim]
-        if not wg_constraint:
+        wv_constraint = [x for x in wave_constraints if x.dim == dim]
+        assert len(wg_constraint) <= 1, "Multiple conflicting WG constraints"
+        assert len(wv_constraint) <= 1, "Multiple conflicting WV constraints"
+        # standalone wg_constraint have already been handled in the thread_independent case.
+
+        if len(wv_constraint) == 0:
             continue
-        index[dim] = hardware_constraint.apply(
-            dim,
-            wg_constraint[0].workgroup_dim,
+        index[dim] = hardware_constraint.apply_thread_dependent_constraint(
+            wg_constraint[0] if len(wg_constraint) > 0 else None,
+            wv_constraint[0],
             elements_per_thread,
             stride,
             False,
             None,
         )
+        print(f"index[dim]: {index[dim]}")
     return [(node, index, hardware_constraint.vector_shapes)]
 
 
@@ -671,24 +696,25 @@ def append_aliased_shapes(source: CustomOp, symbolic_constraints: list[SymbolicA
             )
 
 
-def propagate_index(
+def propagate_thread_dependent_index(
     node: CustomOp,
     hardware_constraint: HardwareConstraint,
     workgroup_constraints: list[WorkgroupConstraint],
+    wave_constraints: list[WaveConstraint],
     mma_index: dict[MMA, dict[IndexSymbol, int]],
     visited: set[CustomOp],
     symbolic_constraints: list[SymbolicAlias],
 ):
     """
     Propagate the index and vector shapes through the graph
-    starting with priveleged nodes (like MMA, Read, Write).
+    starting with privileged nodes (like MMA, Read, Write).
     """
     sources = set()
     if isinstance(node, MMA):
         sources = populate_mma_sources(node, mma_index, hardware_constraint)
     else:
-        sources = populate_non_mma_sources(
-            node, hardware_constraint, workgroup_constraints
+        sources = populate_thread_dependent_non_mma_sources(
+            node, hardware_constraint, workgroup_constraints, wave_constraints
         )
     reduction = None
     while sources:
@@ -736,14 +762,16 @@ def set_thread_dependent_index(
     workgroup_constraints = [
         c for c in constraints if isinstance(c, WorkgroupConstraint)
     ]
+    wave_constraints = [c for c in constraints if isinstance(c, WaveConstraint)]
     symbolic_constraints = [c for c in constraints if isinstance(c, SymbolicAlias)]
     for source in sources:
         visited = visited.union(set([x for x in sources]))
         visited.remove(source)
-        visited = propagate_index(
+        visited = propagate_thread_dependent_index(
             source,
             hardware_constraint,
             workgroup_constraints,
+            wave_constraints,
             mma_index,
             visited,
             symbolic_constraints,
