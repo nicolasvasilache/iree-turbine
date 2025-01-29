@@ -264,31 +264,32 @@ class HardwareConstraint(Constraint):
             if isinstance(vector_size, IndexExpr):
                 self.vector_shapes[vector_dim] = vector_size.subs(index_map)
 
-    def compute_access_pattern_using_vector_shapes(
-        self,
-        dim: IndexSymbol,
-        workgroup_dim: int,
-        elements_per_thread: int | IndexSymbol,
-        stride: int,
-    ) -> IndexSequence:
-        thread_id = self.get_thread_id_from_workgroup_dim(workgroup_dim)
-        return IndexSequence(
-            thread_id * elements_per_thread, elements_per_thread, stride
-        )
+    def apply(self) -> IndexSequence:
+        return self.apply_thread_dependent_constraint()
 
-    def apply(
+    def apply_thread_dependent_constraint(
         self,
-        dim: IndexSymbol,
-        constraint_index: int | MMAOperand,
+        wg_constraint: Optional[Constraint],
+        wv_constraint: Constraint,
+        # TODO: do we need to care about tile_constraints here too ?
+        # constraint_index: int | MMAOperand,
         elements_per_thread: int | IndexSymbol,
         stride: int,
         is_mma_dim: bool,
         mma_type: MMAType,
     ) -> IndexSequence:
+        print(f"wg_constraint: {wg_constraint}")
+        print(f"wv_constraint: {wv_constraint}")
+        assert wg_constraint is None or isinstance(wg_constraint, WorkgroupConstraint)
+        assert wv_constraint is None or isinstance(wv_constraint, WaveConstraint)
         if not is_mma_dim:
-            return self.compute_access_pattern_using_vector_shapes(
-                dim, constraint_index, elements_per_thread, stride
-            )
+            idx_wv = wv_constraint.apply()
+            if wg_constraint is not None:
+                idx_wg = wg_constraint.apply()
+                return IndexSequence(
+                    idx_wg.start + idx_wv.start, 1, elements_per_thread
+                )
+            return idx_wv
         lane = self.linearized_thread_id % self.threads_per_wave
         if mma_type == None:
             mma_type = self.mma_type
