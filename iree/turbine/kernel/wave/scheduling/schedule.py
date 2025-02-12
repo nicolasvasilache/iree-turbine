@@ -7,6 +7,7 @@
 from ..constraints import Constraint
 from ..._support.tracing import CapturedTrace
 from ...ops.wave_ops import Reduction, IterArg, get_custom, CustomOp
+from .multi_buffering import multi_buffer
 from .modulo_scheduling import ModuloScheduler
 from .graph_utils import create_scheduling_edges, Edge
 from .resources import get_available_resources, annotate_resource_usage
@@ -71,10 +72,13 @@ def schedule_reduction(
         if node not in inverse_node_map:
             continue
         custom = get_custom(inverse_node_map[node])
+        stage = cycle // scheduler.initiation_interval
+
+        # Update scheduling parameters
         custom.scheduling_parameters = {
             "absolute_cycle": cycle,
             "cycle": cycle % scheduler.initiation_interval,
-            "stage": cycle // scheduler.initiation_interval,
+            "stage": stage,
             "initiation_interval": scheduler.initiation_interval,
         }
         # Erase edges between outputs and iter args.
@@ -141,6 +145,8 @@ def schedule_reduction(
 
     # Update new reduction count.
     new_reduction.count = max_induction_variable - (scheduler.num_stages - 1)
+
+    multi_buffer(trace)
 
 
 def schedule_graph(
