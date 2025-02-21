@@ -290,7 +290,7 @@ if __name__ == "__main__":
 
         # This microkernel encodes the fact that if the reduction
         # dimension were tiled, then we would need to materialize a loop.
-        @tkw.reduction(K, init_args=[c_reg])
+        @tkw.reduction(K, init_args=[c_reg], multi_buffering_factor=2)
         def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
             # a_reg: tkw.Register[M, K, tkl.f16]
             a_reg = tkw.read(a, elements_per_thread=LOAD_ELEMS_PER_THREAD)
@@ -345,6 +345,7 @@ if __name__ == "__main__":
         b = device_randn(shape[1], shape[2], dtype=torch.float16)
         c = device_zeros(shape[0], shape[1], dtype=torch.float32)
         mb = gemm(a, b, c)
+        print(mb.module_op)
 
         if test_dump_generated_mlir:
             filename = f"wave_gemm_{'x'.join(map(str, shape))}.mlir"

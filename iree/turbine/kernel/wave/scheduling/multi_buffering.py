@@ -82,21 +82,18 @@ def partition_by_memory(rw_ops: list[CustomOp]) -> dict[CustomOp, list[CustomOp]
     return memory_to_rw_ops
 
 
-def multi_buffer(trace: CapturedTrace):
+def multi_buffer(trace, reduction: Reduction):
     """ """
 
-    # Find all reductions
-    reductions = trace.walk(lambda node: isinstance(get_custom(node), Reduction))
-
-    # Get reduction dimension from first reduction
-    if not reductions:
+    if reduction.multi_buffering_factor is None or reduction.multi_buffering_factor < 2:
         return
-    reduction_axis = get_custom(reductions[0]).axis
+
+    reduction_axis = reduction.axis
 
     # Find reads that index using the reduction dim and are from shared memory
     reads = []
     writes = []
-    for node in trace.get_subgraph(get_custom(reductions[0]).subgraph_name).nodes:
+    for node in trace.get_subgraph(reduction.subgraph_name).nodes:
         custom = get_custom(node)
         if not hasattr(custom, "memory_type"):
             continue
@@ -118,12 +115,15 @@ def multi_buffer(trace: CapturedTrace):
         write_nodes = memory_to_writes.get(memory_location, [])
 
         implement_multi_buffering(
-            trace, memory_location, read_nodes, write_nodes, reduction_axis
+            memory_location,
+            read_nodes,
+            write_nodes,
+            reduction_axis,
+            reduction.multi_buffering_factor,
         )
 
 
 def implement_multi_buffering(
-    trace: CapturedTrace,
     original_buffer: CustomOp,
     read_nodes: list[Read],
     write_nodes: list[Write],

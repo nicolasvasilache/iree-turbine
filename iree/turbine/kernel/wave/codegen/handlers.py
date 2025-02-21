@@ -688,7 +688,8 @@ def handle_conditional(emitter: WaveEmitter, node: fx.Node):
 @handle_op(reduction)
 def handle_reduction(emitter: WaveEmitter, node: fx.Node):
     try:
-        axis, init_args, subgraph, implicit_capture = node.args
+
+        axis, init_args, multi_buffering_factor, subgraph, implicit_capture = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 

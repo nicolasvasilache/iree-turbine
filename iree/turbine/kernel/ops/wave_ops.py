@@ -89,7 +89,9 @@ def conditional(
 
 
 def reduction(
-    axis: IndexExpr, init_args: Sequence["Register"]
+    axis: IndexExpr,
+    init_args: Sequence["Register"],
+    multi_buffering_factor: Optional[int],
 ) -> Callable[[Callable[[AccT], AccT]], AccT]:
     ...
 
@@ -1388,8 +1390,9 @@ class Conditional(NestedRegionOp):
 class Reduction(NestedRegionOp):
     axis: IndexSymbol
     init_args: Sequence[Any]
-    subgraph_name: str
-    implicit_captures: Sequence[fx.Proxy]
+    multi_buffering_factor: int = 1
+    subgraph_name: str = None
+    implicit_captures: Sequence[fx.Proxy] = None
 
     @classmethod
     def handle(cls, graph, *args, **kwargs):

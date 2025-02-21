@@ -146,7 +146,7 @@ def schedule_reduction(
     # Update new reduction count.
     new_reduction.count = max_induction_variable - (scheduler.num_stages - 1)
 
-    multi_buffer(trace)
+    multi_buffer(trace, get_custom(new_reduction))
 
 
 def schedule_graph(

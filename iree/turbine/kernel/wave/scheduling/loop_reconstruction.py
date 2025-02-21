@@ -401,6 +401,7 @@ def construct_kernel(
         pipelined_reduction = Reduction(
             reduction.axis,
             init_args=reduction.init_args + flatten_dict_values(rotating_registers),
+            multi_buffering_factor=reduction.multi_buffering_factor,
             subgraph_name="pipelined_reduction",
             implicit_captures=reduction.implicit_captures,
         ).add_to_graph(reduction.graph, type=reduction.type)
