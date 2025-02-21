@@ -64,22 +64,22 @@ BLOCK_K = tkl.sym.BLOCK_K
 ARGK = tkl.IndexSymbol("$ARGK", integer=True, nonnegative=True)
 
 
-def partition_by_memory(reads: list[CustomOp]) -> dict[CustomOp, list[CustomOp]]:
+def partition_by_memory(rw_ops: list[CustomOp]) -> dict[CustomOp, list[CustomOp]]:
     """
-    Partitions reads by their source memory location.
-    Returns a dict mapping memory nodes to lists of read operations from that memory.
+    Partitions read / write ops by their source memory location.
+    Returns a dict mapping memory nodes to lists of operations with that memory.
     """
-    memory_to_reads: dict[CustomOp, list[CustomOp]] = {}
+    memory_to_rw_ops: dict[CustomOp, list[CustomOp]] = {}
 
-    for read_node in reads:
-        memory_node = get_custom(read_node.memory)
+    for rw_op_node in rw_ops:
+        memory_node = get_custom(rw_op_node.memory)
 
-        if memory_node not in memory_to_reads:
-            memory_to_reads[memory_node] = []
+        if memory_node not in memory_to_rw_ops:
+            memory_to_rw_ops[memory_node] = []
 
-        memory_to_reads[memory_node].append(read_node)
+        memory_to_rw_ops[memory_node].append(rw_op_node)
 
-    return memory_to_reads
+    return memory_to_rw_ops
 
 
 def multi_buffer(trace: CapturedTrace):
@@ -117,20 +117,21 @@ def multi_buffer(trace: CapturedTrace):
         read_nodes = memory_to_reads.get(memory_location, [])
         write_nodes = memory_to_writes.get(memory_location, [])
 
-        implement_double_buffering(
+        implement_multi_buffering(
             trace, memory_location, read_nodes, write_nodes, reduction_axis
         )
 
 
-def implement_double_buffering(
+def implement_multi_buffering(
     trace: CapturedTrace,
     original_buffer: CustomOp,
     read_nodes: list[Read],
     write_nodes: list[Write],
     axis: IndexSymbol,
+    num_mb_stages: int = 2,
 ):
     """
-    Implements double buffering for a shared memory buffer.
+    Implements multi buffering for a shared memory buffer.
     """
     # For now only double buffering, so we are doubling the
     # size of the original buffer
@@ -142,11 +143,11 @@ def implement_double_buffering(
 
     block_size = original_buffer.distributed_shape[1 - reduction_dim_index]
     new_shape = tuple(
-        dim * 2 if i != reduction_dim_index else dim
+        dim * num_mb_stages if i != reduction_dim_index else dim
         for i, dim in enumerate(original_buffer.shape)
     )
     new_distributed_shape = tuple(
-        dim * 2 if i != reduction_dim_index else dim
+        dim * num_mb_stages if i != reduction_dim_index else dim
         for i, dim in enumerate(original_buffer.distributed_shape)
     )
     original_buffer.update_arg(0, new_shape)
@@ -165,18 +166,13 @@ def implement_double_buffering(
         stage_mapping[cycle].append(custom_op)
 
     for stage in stage_mapping.keys():
-        print(f"modifying for {stage}")
         offset = 0
         for op in stage_mapping[stage]:
-            buffer_offset = (ARGK % 2) * block_size
+            buffer_offset = (ARGK % num_mb_stages) * block_size
             #  TODO TODO TODO: This is still hardcoded
-            if stage < 2:
+            if stage < num_mb_stages:
                 offset = buffer_offset
-            elif stage >= 2:
-                offset = xor(buffer_offset, block_size)
             else:
-                raise CodegenError(
-                    f"Stage > 4 not supported in multibuffering currently"
-                )
+                offset = xor(buffer_offset, block_size)
 
             op.index[original_dim].start = op.index[original_dim].start + offset
