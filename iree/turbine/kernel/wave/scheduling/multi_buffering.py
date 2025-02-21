@@ -57,12 +57,6 @@ from iree.compiler.dialects import (
     _structured_transform_ops_gen as structured_transform_ops,
 )
 
-K = tkl.sym.K
-M = tkl.sym.M
-BLOCK_M = tkl.sym.BLOCK_M
-BLOCK_K = tkl.sym.BLOCK_K
-ARGK = tkl.IndexSymbol("$ARGK", integer=True, nonnegative=True)
-
 
 def partition_by_memory(rw_ops: list[CustomOp]) -> dict[CustomOp, list[CustomOp]]:
     """
@@ -84,7 +78,6 @@ def partition_by_memory(rw_ops: list[CustomOp]) -> dict[CustomOp, list[CustomOp]
 
 def multi_buffer(trace, reduction: Reduction):
     """ """
-
     if reduction.multi_buffering_factor is None or reduction.multi_buffering_factor < 2:
         return
 
@@ -168,6 +161,9 @@ def implement_multi_buffering(
     for stage in stage_mapping.keys():
         offset = 0
         for op in stage_mapping[stage]:
+            # This is really a hack that knows that `axis.name` when tiled with
+            # a TilingConstraint, produces $ARG`axis.name`.
+            ARGK = tkl.IndexSymbol("$ARG" + axis.name, integer=True, nonnegative=True)
             buffer_offset = (ARGK % num_mb_stages) * block_size
             #  TODO TODO TODO: This is still hardcoded
             if stage < num_mb_stages:
