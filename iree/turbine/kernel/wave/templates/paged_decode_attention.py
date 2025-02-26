@@ -94,6 +94,7 @@ def get_paged_decode_attention_kernels(
         constraints += [
             tkw.WorkgroupConstraint(T, BLOCK_T, 0, apply_fn=wg_func, primary=False)
         ]
+        constraints += [tkw.WaveConstraint(T, 1)]
         constraints += [tkw.TilingConstraint(T, 1, iters=iter_count)]
 
         # BH is the kv-head index and is distributed across workgroups.

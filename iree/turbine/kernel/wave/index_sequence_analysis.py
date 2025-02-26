@@ -26,8 +26,11 @@ from ..ops.wave_ops import (
 from .constraints import (
     Constraint,
     HardwareConstraint,
+    ThreadConstraint,
     TilingConstraint,
+    UnrollingConstraint,
     WorkgroupConstraint,
+    workgroup_constraints_dim_idx_mapping,
 )
 from .assumptions import Assumption
 from .symbolic_constraints import SymbolicAlias
@@ -49,7 +52,7 @@ from .utils import (
 )
 import torch.fx as fx
 import numpy as np
-from typing import Sequence, Callable, Optional
+from typing import Callable, Optional, Sequence, Tuple
 from ...support.logging import get_logger
 import sympy
 from itertools import groupby
@@ -473,6 +476,7 @@ def set_node_indices(
     )
     trace.walk(partial(set_thread_independent_index, constraints))
 
+    print_ir_after = ["all"]
     if (
         "all" in print_ir_after
         or "all" in print_ir_before
@@ -539,8 +543,8 @@ def is_contiguous_dim(
     is_innermost_dim = dim == symbolic_shape[-1]
     dim_index = symbolic_shape.index(dim)
     static_shape = [vector_shapes[dim] for dim in symbolic_shape]
-    all_unit_dims = all(dim == 1 for dim in static_shape[dim_index + 1 :])
-    return is_innermost_dim or all_unit_dims
+    all_trailing_dims_are_unit = all(dim == 1 for dim in static_shape[dim_index + 1 :])
+    return is_innermost_dim or all_trailing_dims_are_unit
 
 
 def set_thread_independent_index(
@@ -555,10 +559,21 @@ def set_thread_independent_index(
         return
 
     hw_cons = get_hardware_constraint(constraints)
+    # UnrollingConstraint is for verification purposes only.
+    # ThreadConstraint is thread-dependent.
     constraints = [
         c
         for c in constraints
-        if not isinstance(c, (HardwareConstraint, Assumption, SymbolicAlias))
+        if not isinstance(
+            c,
+            (
+                HardwareConstraint,
+                Assumption,
+                SymbolicAlias,
+                UnrollingConstraint,
+                ThreadConstraint,
+            ),
+        )
     ]
 
     index = {}
@@ -641,12 +656,19 @@ def populate_read_write_source_indices(
     node: Read | Write,
     hardware_constraint: HardwareConstraint,
     workgroup_constraints: list[WorkgroupConstraint],
-):
+    thread_constraints: list[ThreadConstraint],
+) -> Sequence[
+    Tuple[CustomOp, dict[IndexSymbol, IndexSequence], dict[IndexSymbol, int]]
+]:
     """
     Initialize the sources with the read and/or write nodes
     and their index sequences and vector shapes. These will
     be propagated to the rest of the graph.
     """
+    dim_to_idx, idx_to_dim, _ = workgroup_constraints_dim_idx_mapping(
+        workgroup_constraints
+    )
+
     index: dict[IndexSymbol, IndexSequence] = {}
     for dim in node.indexing_dims:
         elements_per_thread = (
@@ -662,6 +684,14 @@ def populate_read_write_source_indices(
         wg_constraint = [x for x in workgroup_constraints if x.dim == dim]
         if not wg_constraint:
             continue
+        thread_constraint = [x for x in thread_constraints if x.dim == dim]
+        if thread_constraint:
+            tc = thread_constraint[0]
+            elements_per_thread = (
+                elements_per_thread
+                * tc.tile_size
+                * hardware_constraint.threads_per_block[idx_to_dim[tc.dim]]
+            )
         index[dim] = hardware_constraint.apply_read_write_thread_mapping(
             dim, wg_constraint[0].workgroup_dim, elements_per_thread, stride
         )
@@ -764,13 +794,15 @@ def append_aliased_shapes(source: CustomOp, symbolic_constraints: list[SymbolicA
 
 
 def propagate_indices(
-    sources: set[CustomOp],
+    sources: Sequence[
+        Tuple[CustomOp, dict[IndexSymbol, IndexSequence], dict[IndexSymbol, int]]
+    ],
     visited: set[CustomOp],
     symbolic_constraints: list[SymbolicAlias],
 ):
     """
     Propagate the index and vector shapes through the graph
-    starting with priveleged nodes (like MMA, Read, Write).
+    starting with privileged nodes (like MMA, Read, Write).
     """
     reduction = None
     while sources:
@@ -810,21 +842,15 @@ def set_thread_dependent_index_from_mma(
     hardware_constraint = get_hardware_constraint(constraints)
     sources: list[MMA] = list(mma_mapping.keys())
     assert sources and len(sources) >= 1, "Unexpected empty MMA mapping."
-    if not sources:
-        sources = trace.walk(lambda node: isinstance(get_custom(node), (Read, Write)))
-        sources = [get_custom(x) for x in sources]
-        assert sources, "No read or mma nodes found in the graph."
 
     visited = set()
     symbolic_constraints = [c for c in constraints if isinstance(c, SymbolicAlias)]
     for source in sources:
         visited = visited.union(set([x for x in sources]))
         visited.remove(source)
-        new_sources = populate_mma_source_indices(
-            source, mma_mapping, hardware_constraint
-        )
+        indices = populate_mma_source_indices(source, mma_mapping, hardware_constraint)
         visited = propagate_indices(
-            new_sources,
+            indices,
             visited,
             symbolic_constraints,
         )
@@ -846,15 +872,16 @@ def set_thread_dependent_index_from_read_write(
     workgroup_constraints = [
         c for c in constraints if isinstance(c, WorkgroupConstraint)
     ]
+    thread_constraints = [c for c in constraints if isinstance(c, ThreadConstraint)]
     symbolic_constraints = [c for c in constraints if isinstance(c, SymbolicAlias)]
     for source in sources:
         visited = visited.union(set([x for x in sources]))
         visited.remove(source)
-        new_sources = populate_read_write_source_indices(
-            source, hardware_constraint, workgroup_constraints
+        indices = populate_read_write_source_indices(
+            source, hardware_constraint, workgroup_constraints, thread_constraints
         )
         visited = propagate_indices(
-            new_sources,
+            indices,
             visited,
             symbolic_constraints,
         )

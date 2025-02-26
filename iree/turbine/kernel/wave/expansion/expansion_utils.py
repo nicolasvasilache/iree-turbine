@@ -11,6 +11,8 @@ from ..constraints import (
     HardwareConstraint,
     WorkgroupConstraint,
     TilingConstraint,
+    is_dim_mapped_to_waves,
+    is_dim_mapped_to_threads,
 )
 from torch import fx
 from ..._support.indexing import IndexingContext, IndexSymbol
@@ -64,35 +66,51 @@ def get_dim_scaling(
 
     idxc = IndexingContext.current()
     for constraint in constraints:
-        if isinstance(constraint, WorkgroupConstraint) or isinstance(
+        if not isinstance(constraint, WorkgroupConstraint) and not isinstance(
             constraint, TilingConstraint
         ):
-            hw_cons = hardware_constraints[0]
-            tile_size = idxc.get_static_value(constraint.tile_size)
-            if constraint.dim not in node.vector_shapes:
-                continue
-            vector_size = node.vector_shapes[constraint.dim]
+            continue
 
-            # No dim scaling for dims with 0 vector size.
-            if vector_size == 0:
-                continue
+        hw_cons = hardware_constraints[0]
+        tile_size = idxc.get_static_value(constraint.tile_size)
+        if constraint.dim not in node.vector_shapes:
+            continue
+        vector_size = node.vector_shapes[constraint.dim]
 
-            wave_count = 1
-            if isinstance(constraint, WorkgroupConstraint):
-                wave_count = hw_cons.waves_per_block[constraint.workgroup_dim]
-            if tile_size is None or wave_count is None or vector_size is None:
+        # No dim scaling for dims with 0 vector size.
+        # TODO: what does this mean?
+        if vector_size == 0:
+            continue
+
+        distribution_factor = 1
+        if isinstance(constraint, WorkgroupConstraint):
+            if is_dim_mapped_to_waves(constraint.dim, constraints):
+                distribution_factor = hw_cons.waves_per_block[constraint.workgroup_dim]
+            elif is_dim_mapped_to_threads(constraint.dim, constraints):
+                distribution_factor = hw_cons.threads_per_block[
+                    constraint.workgroup_dim
+                ]
+            else:
                 raise ValueError(
-                    "Tile size, wave count and vector size must be statically known"
+                    f"Dimension {constraint.dim} must be mapped to waves or threads"
                 )
-            if (
-                tile_size % wave_count != 0
-                or (tile_size / wave_count) % vector_size != 0
-            ):
-                raise ValueError(
-                    f"Tile size must be divisible by wave count and vector size, got: "
-                    f"tile_size={tile_size}, wave_count={wave_count}, vector_size={vector_size}"
-                )
-            dim_scaling[constraint.dim] = tile_size // wave_count // vector_size
+        if tile_size is None or distribution_factor is None or vector_size is None:
+            raise ValueError(
+                f"""
+                Tile size, wave count and vector size must be statically known
+                but got {tile_size} {distribution_factor} {vector_size}
+                for constraint {constraint}
+                """
+            )
+        if (
+            tile_size % distribution_factor != 0
+            or (tile_size / distribution_factor) % vector_size != 0
+        ):
+            raise ValueError(
+                f"Tile size must be divisible by wave count and vector size, got: "
+                f"tile_size={tile_size}, distribution_factor={distribution_factor}, vector_size={vector_size}"
+            )
+        dim_scaling[constraint.dim] = tile_size // distribution_factor // vector_size
 
     # Also include dimensions that have no constraints on them and are known.
     idxc = IndexingContext.current()

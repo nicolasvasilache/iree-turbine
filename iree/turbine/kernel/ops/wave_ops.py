@@ -1674,6 +1674,7 @@ class GetResult(CustomOp):
         if isinstance(src_type, list):
             self.type = src_type[self.res_idx]
         else:
+            # TODO: assert res_idx == 0 ?
             self.type = src_type
 
     @property

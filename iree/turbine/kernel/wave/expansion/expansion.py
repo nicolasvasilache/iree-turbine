@@ -111,10 +111,11 @@ def get_dim_combinations(
         for dim in dim_scaling
     ]
     dim_combinations = itertools.product(*adjusted_dimension_sizes)
-    return [
+    res = [
         {dim: val for dim, val in zip(dim_scaling.keys(), dim_combination)}
         for dim_combination in dim_combinations
     ]
+    return res
 
 
 def filter_expandable_args(args: list[Any]) -> list[Any]:
