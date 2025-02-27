@@ -26,7 +26,9 @@ from ..ops.wave_ops import (
 from .constraints import (
     Constraint,
     HardwareConstraint,
+    ThreadConstraint,
     TilingConstraint,
+    UnrollingConstraint,
     WorkgroupConstraint,
 )
 from .assumptions import Assumption
@@ -43,11 +45,13 @@ from .utils import (
     get_inputs,
     get_users,
     get_largest_index_and_size,
+    partial,
+    print_trace,
+    try_apply_pass,
 )
 import torch.fx as fx
 import numpy as np
-from functools import partial
-from typing import Sequence, Callable, Optional
+from typing import Callable, Optional, Sequence, Tuple
 from ...support.logging import get_logger
 import sympy
 from itertools import groupby
@@ -460,18 +464,46 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
         assert custom.vector_shapes, f"Vector shapes not set for node {custom.fx_node}"
 
 
-def set_node_indices(trace: CapturedTrace, constraints: list[Constraint]):
+def set_node_indices(
+    trace: CapturedTrace,
+    constraints: list[Constraint],
+    print_ir_before: Sequence[str] = [],
+    print_ir_after: Sequence[str] = [],
+):
     mma_mapping = get_mma_dimensional_mapping(
         trace, get_hardware_constraint(constraints)
     )
     trace.walk(partial(set_thread_independent_index, constraints))
+
+    if (
+        "all" in print_ir_after
+        or "all" in print_ir_before
+        or "trace" in print_ir_after
+        or "first" in print_ir_before
+    ):
+        print(
+            f"***After set_thread_independent_index/Before set_thread_dependent_index pass***\n"
+        )
+        print_trace(trace)
+
+    graph_passes = []
     if mma_mapping != {}:
-        set_thread_dependent_index_from_mma(constraints, mma_mapping, trace)
+        graph_passes += [
+            partial(
+                set_thread_dependent_index_from_mma, constraints, mma_mapping, trace
+            )
+        ]
     else:
-        set_thread_dependent_index_from_read_write(constraints, trace)
-    set_derived_index(trace)
-    resolve_thread_shapes(trace, constraints)
-    verify_nodes(trace, constraints)
+        graph_passes += [
+            partial(set_thread_dependent_index_from_read_write, constraints, trace)
+        ]
+    graph_passes += [
+        partial(set_derived_index, trace),
+        partial(resolve_thread_shapes, trace, constraints),
+        partial(verify_nodes, trace, constraints),
+    ]
+    for p in graph_passes:
+        try_apply_pass(p, trace, print_ir_before, print_ir_after)
 
 
 def compute_stride(
@@ -572,27 +604,40 @@ def set_thread_independent_index(
         return
 
     hw_cons = get_hardware_constraint(constraints)
+    # UnrollingConstraint is for verification purposes only.
+    # ThreadConstraint is thread-dependent.
     constraints = [
         c
         for c in constraints
-        if not isinstance(c, (HardwareConstraint, Assumption, SymbolicAlias))
+        if not isinstance(
+            c,
+            (
+                HardwareConstraint,
+                Assumption,
+                SymbolicAlias,
+                UnrollingConstraint,
+                ThreadConstraint,
+            ),
+        )
     ]
 
     index = {}
     for dim in custom.indexing_dims:
         index_seq = None
         for constraint in constraints:
-            if constraint.dim == dim:
-                # If the constraint is a tiling constraint, and the node
-                # is outside a reduction, we don't apply the constraint.
-                if isinstance(constraint, TilingConstraint):
-                    if not hasattr(custom.graph, "parent_op"):
-                        continue
+            if constraint.dim != dim:
+                continue
 
-                if index_seq is None:
-                    index_seq = constraint.apply()
-                else:
-                    index_seq.start += constraint.apply().start
+            # If the constraint is a tiling constraint, and the node
+            # is outside a reduction, we don't apply the constraint.
+            if isinstance(constraint, TilingConstraint):
+                if not hasattr(custom.graph, "parent_op"):
+                    continue
+
+            if index_seq is None:
+                index_seq = constraint.apply()
+            else:
+                index_seq.start += constraint.apply().start
 
         if index_seq is not None:
             index.update({dim: index_seq})
@@ -611,7 +656,7 @@ def specialize_index(
     return {dim: seq.subs(subs) for dim, seq in index.items()}
 
 
-def populate_mma_sources(
+def populate_mma_source_indices(
     node: MMA,
     mma_index: dict[MMA, dict[IndexSymbol, int]],
     hardware_constraint: HardwareConstraint,
@@ -652,11 +697,13 @@ def populate_mma_sources(
     ]
 
 
-def populate_read_write_sources(
+def populate_read_write_source_indices(
     node: Read | Write,
     hardware_constraint: HardwareConstraint,
     workgroup_constraints: list[WorkgroupConstraint],
-):
+) -> Sequence[
+    Tuple[CustomOp, dict[IndexSymbol, IndexSequence], dict[IndexSymbol, int]]
+]:
     """
     Initialize the sources with the read and/or write nodes
     and their index sequences and vector shapes. These will
@@ -778,14 +825,16 @@ def append_aliased_shapes(source: CustomOp, symbolic_constraints: list[SymbolicA
             )
 
 
-def propagate_index(
-    sources: set[CustomOp],
+def propagate_indices(
+    sources: Sequence[
+        Tuple[CustomOp, dict[IndexSymbol, IndexSequence], dict[IndexSymbol, int]]
+    ],
     visited: set[CustomOp],
     symbolic_constraints: list[SymbolicAlias],
 ):
     """
     Propagate the index and vector shapes through the graph
-    starting with priveleged nodes (like MMA, Read, Write).
+    starting with privileged nodes (like MMA, Read, Write).
     """
     reduction = None
     while sources:
@@ -825,19 +874,15 @@ def set_thread_dependent_index_from_mma(
     hardware_constraint = get_hardware_constraint(constraints)
     sources: list[MMA] = list(mma_mapping.keys())
     assert sources and len(sources) >= 1, "Unexpected empty MMA mapping."
-    if not sources:
-        sources = trace.walk(lambda node: isinstance(get_custom(node), (Read, Write)))
-        sources = [get_custom(x) for x in sources]
-        assert sources, "No read or mma nodes found in the graph."
 
     visited = set()
     symbolic_constraints = [c for c in constraints if isinstance(c, SymbolicAlias)]
     for source in sources:
         visited = visited.union(set([x for x in sources]))
         visited.remove(source)
-        new_sources = populate_mma_sources(source, mma_mapping, hardware_constraint)
-        visited = propagate_index(
-            new_sources,
+        indices = populate_mma_source_indices(source, mma_mapping, hardware_constraint)
+        visited = propagate_indices(
+            indices,
             visited,
             symbolic_constraints,
         )
@@ -863,11 +908,11 @@ def set_thread_dependent_index_from_read_write(
     for source in sources:
         visited = visited.union(set([x for x in sources]))
         visited.remove(source)
-        new_sources = populate_read_write_sources(
+        indices = populate_read_write_source_indices(
             source, hardware_constraint, workgroup_constraints
         )
-        visited = propagate_index(
-            new_sources,
+        visited = propagate_indices(
+            indices,
             visited,
             symbolic_constraints,
         )

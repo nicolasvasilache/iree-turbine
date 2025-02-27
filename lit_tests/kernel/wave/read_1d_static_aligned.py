@@ -43,17 +43,17 @@ def harness_1d_global_mem(build_constraints_fun, kernel_fun, *args, **kwargs):
         lw = LaunchableWave(constraints, "kernel_fun", kernel_fun)
 
         trace: CapturedTrace = lw._trace()
-        idxc: IndexingContext = IndexingContext.current()
-        graph_passes = lw.build_initial_pass_pipeline(trace, idxc)
+        graph_passes = lw.build_initial_pass_pipeline(trace)
         for p in graph_passes:
             lw.try_apply_pass(p, trace, ["all"])
 
+        idxc: IndexingContext = IndexingContext.current()
         lw.infer_grid_shape(idxc)
 
         compile_config = get_default_compile_config()
         with Context() as context:
             mb, trace, exe, kernel_sig, entrypoint_name = lw.compile_to_scf_dialect(
-                trace, compile_config, context, **kwargs
+                trace, context, *args, **kwargs
             )
             print(mb.module_op)
 
@@ -61,13 +61,13 @@ def harness_1d_global_mem(build_constraints_fun, kernel_fun, *args, **kwargs):
 def build_block_constraints(*args, **kwargs) -> Sequence[tkw.Constraint]:
     constraints: list[tkw.Constraint] = []
     constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
-    # constraints += [tkw.WaveConstraint(M, 4)]
+    constraints += [tkw.ThreadConstraint(M, 1)]
     constraints += [
         tkw.HardwareConstraint(
             threads_per_wave=64,
             waves_per_block=kwargs["waves_per_block"]
             if "waves_per_block" in kwargs
-            else (4, 1, 1),
+            else (1, 1, 1),
             # One must always specify mma_type or vector_shapes.
             vector_shapes=kwargs["vector_shapes"] if "vector_shapes" in kwargs else {},
         )
@@ -79,7 +79,7 @@ def static_config_1xwave_block_1xvector_1xload_1xstore():
     return {
         "static_symbols": {
             M: 128,
-            BLOCK_M: 64,
+            BLOCK_M: 1,
             ELEMENTS_PER_LOAD: 1,
             ELEMENTS_PER_STORE: 1,
         },

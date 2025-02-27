@@ -25,9 +25,12 @@ from .constraints import (
     Constraint,
     HardwareConstraint,
     TilingConstraint,
+    ThreadConstraint,
+    UnrollingConstraint,
     WaveConstraint,
     WorkgroupConstraint,
     get_grid_shape,
+    verify_constraints,
 )
 
 # Passes
@@ -68,6 +71,7 @@ from .utils import (
     initialize_iter_args,
     partial,
     print_trace,
+    try_apply_pass,
 )
 from .cache import (
     is_cache_enabled,
@@ -130,6 +134,14 @@ class LaunchableWave(Launchable):
             constraint
             for constraint in self.constraints
             if isinstance(constraint, TilingConstraint)
+        ]
+
+    @property
+    def thread_constraints(self) -> list[ThreadConstraint]:
+        return [
+            constraint
+            for constraint in self.constraints
+            if isinstance(constraint, ThreadConstraint)
         ]
 
     @property
@@ -197,6 +209,22 @@ class LaunchableWave(Launchable):
             for tiling_constraint in self.tiling_constraints:
                 if tiling_constraint.dim == custom.axis:
                     tiling_constraint.induction_var = self.induction_vars[custom]
+
+    def initialize_thread_constraints(self, trace: CapturedTrace) -> None:
+        """
+        For each thread constraint, determines the appropriate thread id by looking
+        for workgroup constraints along the same dimension and using information
+        from the hardware constraints.
+
+        """
+
+        hardware_constraint = self.hardware_constraints[0]
+        for thread_constraint in self.thread_constraints:
+            for workgroup_constraint in self.workgroup_constraints:
+                if thread_constraint.dim == workgroup_constraint.dim:
+                    thread_constraint.set_thread_id_from_hardware_and_workgroup_constraint(
+                        hardware_constraint, workgroup_constraint
+                    )
 
     def initialize_wave_constraints(self, trace: CapturedTrace) -> None:
         """
@@ -279,10 +307,18 @@ class LaunchableWave(Launchable):
         For each symbolic constraint, create new constraints for the
         related symbolic values with appropriate substitutions.
         """
-        new_wg_constraints, new_wave_constraints, new_tiling_constraints = [], [], []
+        (
+            new_wg_constraints,
+            new_thread_constraints,
+            new_wave_constraints,
+            new_tiling_constraints,
+        ) = ([], [], [], [])
         for symbolic_constraint in self.symbolic_constraints:
             new_wg_constraints += symbolic_constraint.create_new_constraints(
                 self.workgroup_constraints
+            )
+            new_thread_constraints += symbolic_constraint.create_new_constraints(
+                self.thread_constraints
             )
             new_wave_constraints += symbolic_constraint.create_new_constraints(
                 self.wave_constraints
@@ -291,6 +327,7 @@ class LaunchableWave(Launchable):
                 self.tiling_constraints
             )
         # Remove wave constraints with same tile size as workgroup constraints
+        # TODO: why do we need this, shouldn't it just be a verification error?
         for wave_constraint in new_wave_constraints:
             for workgroup_constraint in new_wg_constraints:
                 if (
@@ -299,7 +336,10 @@ class LaunchableWave(Launchable):
                 ):
                     new_wave_constraints.remove(wave_constraint)
         self.constraints += (
-            new_wg_constraints + new_wave_constraints + new_tiling_constraints
+            new_wg_constraints
+            + new_thread_constraints
+            + new_wave_constraints
+            + new_tiling_constraints
         )
         idxc = IndexingContext.current()
         for constraint in self.symbolic_constraints:
@@ -324,26 +364,6 @@ class LaunchableWave(Launchable):
                 else max_workgroup_dim
             )
             self.grid_type.dims[dim] *= safe_subs(constraint.count, idxc.subs)
-
-    def try_apply_pass(
-        self,
-        p,
-        trace: CapturedTrace,
-        print_ir_before: Sequence[str] = [],
-        print_ir_after: Sequence[str] = [],
-    ):
-        if "all" in print_ir_before or p.__name__ in print_ir_before:
-            print(f"***Before {p.__name__}***\n")
-            print_trace(trace)
-        try:
-            p()
-        except Exception:
-            print(f"Error in pass: {p.__name__}\n")
-            print_trace(trace)
-            raise
-        if "all" in print_ir_after or p.__name__ in print_ir_after:
-            print(f"***After {p.__name__}***\n")
-            print_trace(trace)
 
     def compile_to_mlir(
         self,
@@ -407,7 +427,12 @@ class LaunchableWave(Launchable):
 
         return mb, trace, exe, kernel_sig, entrypoint_name
 
-    def build_initial_pass_pipeline(self, trace: CapturedTrace):
+    def build_initial_pass_pipeline(
+        self,
+        trace: CapturedTrace,
+        print_ir_before: Sequence[str] = [],
+        print_ir_after: Sequence[str] = [],
+    ):
         idxc = IndexingContext.current()
 
         def finalize_indices():
@@ -419,15 +444,28 @@ class LaunchableWave(Launchable):
         return [
             partial(initialize_iter_args, trace),
             partial(self.create_induction_vars, trace),
+            partial(self.initialize_thread_constraints, trace),
             partial(self.initialize_wave_constraints, trace),
             partial(self.initialize_reductions, trace),
+            # Verification must be done before symbolic constraints introduces
+            # new constraints that may interfere.
+            # Redundant constraints introduced by the system are assumed not to
+            # interfere by construction and we do not want to reverse engineer
+            # this post-hoc.
+            partial(verify_constraints, self.constraints),
             partial(self.initialize_symbolic_constraints, trace),
             partial(self.initialize_workgroup_constraints, trace),
             finalize_indices,
             substitute_vector_shapes,
             partial(infer_types, trace),
             partial(promote_placeholders, trace, self.constraints),
-            partial(set_node_indices, trace, self.constraints),
+            partial(
+                set_node_indices,
+                trace,
+                self.constraints,
+                print_ir_before,
+                print_ir_after,
+            ),
             partial(expand_graph, trace, self.constraints),
             partial(set_post_expansion_indices, trace, self.constraints),
             partial(remove_chained_getresult, trace),
@@ -463,7 +501,9 @@ class LaunchableWave(Launchable):
             print_trace(trace)
 
         # Initial passes, pre-optimization.
-        graph_passes = self.build_initial_pass_pipeline(trace)
+        graph_passes = self.build_initial_pass_pipeline(
+            trace, print_ir_before, print_ir_after
+        )
 
         # Optimizations.
         graph_passes += [
@@ -513,7 +553,10 @@ class LaunchableWave(Launchable):
         ]
 
         for p in graph_passes:
-            self.try_apply_pass(p, trace, print_ir_before, print_ir_after)
+            # align_index_sizes is known to break IR printing.
+            if p.__name__ == "align_index_sizes":
+                print_ir_before, print_ir_after = [], []
+            try_apply_pass(p, trace, print_ir_before, print_ir_after)
 
         if "all" in print_ir_after or "last" in print_ir_after:
             # Take advantage of Python leaking loop variables
