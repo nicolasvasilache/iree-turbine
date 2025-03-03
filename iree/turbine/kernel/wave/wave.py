@@ -30,7 +30,8 @@ from .constraints import (
     WaveConstraint,
     WorkgroupConstraint,
     get_grid_shape,
-    verify_constraints,
+    verify_global_constraints,
+    verify_node_specific_constraints,
 )
 
 # Passes
@@ -452,7 +453,7 @@ class LaunchableWave(Launchable):
             # Redundant constraints introduced by the system are assumed not to
             # interfere by construction and we do not want to reverse engineer
             # this post-hoc.
-            partial(verify_constraints, self.constraints),
+            partial(verify_global_constraints, self.constraints),
             partial(self.initialize_symbolic_constraints, trace),
             partial(self.initialize_workgroup_constraints, trace),
             finalize_indices,

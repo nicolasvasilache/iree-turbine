@@ -13,6 +13,7 @@ from sympy import ceiling, Piecewise, floor
 from .._support.indexing import IndexExpr, IndexSymbol, IndexSequence
 from .._support.dtype import DataType
 from ..lang.global_symbols import *
+from ..ops.wave_ops import CustomOp
 
 """
 Formatting for different target intrinsics:
@@ -103,7 +104,7 @@ class HardwareConstraint(Constraint):
     """
 
     threads_per_wave: int
-    waves_per_block: Optional[tuple[int, int, int]] = None
+    threads_per_block: tuple[int, int, int] = (64, 1, 1)
     mma_type: Optional[MMAType] = MMAType.F32_16x16x16_F16
     vector_shapes: Optional[dict[IndexSymbol, int]] = None
     max_bits_per_load: int = 128
@@ -240,10 +241,13 @@ class HardwareConstraint(Constraint):
         return offset
 
     @property
-    def threads_per_block(self) -> tuple[int]:
+    def waves_per_block(self) -> tuple[int]:
+        assert (
+            self.threads_per_block[0] % self.threads_per_wave == 0
+        ), "threads_per_block[0] must be a multiple of threads_per_wave"
         return (
-            self.waves_per_block[0] * self.threads_per_wave,
-        ) + self.waves_per_block[1:]
+            self.threads_per_block[0] // self.threads_per_wave,
+        ) + self.threads_per_block[1:]
 
     @property
     def linearized_thread_id(self) -> IndexExpr:
@@ -404,13 +408,7 @@ def get_grid_shape(wg_constraints: list[WorkgroupConstraint]) -> list[IndexExpr]
         [x for x in wg_constraints if x.primary], key=lambda x: x.workgroup_dim
     )
     # Currently not more than one primary constraint in each dimension supported.
-    if any(
-        sorted_constraints[i].workgroup_dim == sorted_constraints[i + 1].workgroup_dim
-        for i in range(len(sorted_constraints) - 1)
-    ):
-        raise ValueError(
-            "Multiple constraints in the same workgroup dimension are currently not supported."
-        )
+    # This is captured in verify_global_constraints.
     grid: list[IndexExpr] = [constraint.count for constraint in sorted_constraints]
     return grid
 
@@ -710,104 +708,155 @@ def constraint_list_to_str(constraints: Sequence[Constraint]):
     return "\n\t".join(strs)
 
 
-def verify_constraints(constraints: Sequence[Constraint]):
-    hardware_constraints = [c for c in constraints if isinstance(c, HardwareConstraint)]
-    assert (
-        len(hardware_constraints) <= 1
-    ), "Exactly one hardware constraint must be provided"
+def verify_global_constraints(constraints: Sequence[Constraint]):
+    """
+    Centralize node-invariant constraint verification.
 
+    This must be called before SymbolicConstraints that may alias are processed.
+    Calling before SymbolicConstraints avoids reverse engineering primary
+    constraint relationships.
+    """
+    non_symbolic_constraint = constraints
+    # TODO: fix dependency ..
+    # non_symbolic_constraint = [c for c in constraints if not isinstance(c, SymbolicConstraint)]
+
+    hardware_constraints = [
+        c for c in non_symbolic_constraint if isinstance(c, HardwareConstraint)
+    ]
     workgroup_constraints = [
-        c for c in constraints if isinstance(c, WorkgroupConstraint)
+        c for c in non_symbolic_constraint if isinstance(c, WorkgroupConstraint)
     ]
-    tiling_constraints = [c for c in constraints if isinstance(c, TilingConstraint)]
-    wave_constraints = [c for c in constraints if isinstance(c, WaveConstraint)]
+    thread_constraints = [
+        c for c in non_symbolic_constraint if isinstance(c, ThreadConstraint)
+    ]
+    wave_constraints = [
+        c for c in non_symbolic_constraint if isinstance(c, WaveConstraint)
+    ]
+    tiling_constraints = [
+        c for c in non_symbolic_constraint if isinstance(c, TilingConstraint)
+    ]
     unrolling_constraints = [
-        c for c in constraints if isinstance(c, UnrollingConstraint)
+        c for c in non_symbolic_constraint if isinstance(c, UnrollingConstraint)
     ]
 
-    # Assert no conflict in the workgroup dimensions.
+    # 1. Exactly 1 hardware constraint must be provided.
+    assert (
+        len(hardware_constraints) == 1
+    ), "Exactly one hardware constraint must be provided"
+    hw_cons = hardware_constraints[0]
+
+    # 2. Internally, verify no conflict in the primary workgroup dimensions.
+    # This must be called before SymbolicConstraints that may alias are processed.
+    # Compute dim_to_idx and dim_to_idx.
     dim_to_idx, idx_to_dim, dim_to_idx_seen = workgroup_constraints_dim_idx_map(
         workgroup_constraints
     )
 
-    # Assert proper workgroup constraints.
+    # 3. Verify proper workgroup constraints.
     for workgroup_dim, _ in dim_to_idx_seen.items():
         assert (
             workgroup_dim in dim_to_idx.keys()
         ), f"""
         Need at least a primary constraint in each seen workgroup dimension but
-        non found for dim {workgroup_dim}.
-        {constraint_list_to_str(constraints)}
+        none found for dim {workgroup_dim}.
+        {constraint_list_to_str(non_symbolic_constraint)}
         """
 
+    # 4. Verify dim 0 has a WorkgroupConstraint.
     assert (
         0 in dim_to_idx.keys()
     ), f"""
         Need at least a primary constraint for workgroup dimension 0.
-        {constraint_list_to_str(constraints)}
+        {constraint_list_to_str(non_symbolic_constraint)}
         """
 
-    # For each workgroup_dim, there should be exactly one of either:
+    # 5. For each workgroup_dim, there should be at least one of either:
     #   - WaveConstraint
     #   - ThreadConstraint
     #   - TilingConstraint
     #   - UnrollingConstraint
+    # but at most one thread-bearing constraint
     # In the absence of a constraint, UnrollingConstraint is implicit but we want
     # to really make it explicit in the programming model and ensure the user
     # understands the implication.
     for workgroup_dim, idx in dim_to_idx.items():
-        local_constraints = [
+        if workgroup_dim == __WORKGROUP_SENTINEL_DIM__:
+            continue
+
+        lcs = [
             c
-            for c in constraints
+            for c in non_symbolic_constraint
             if not isinstance(c, WorkgroupConstraint)
             and not isinstance(c, HardwareConstraint)
             and hasattr(c, "dim")
             and c.dim == idx
         ]
-        if workgroup_dim == 0:
+
+        # 6. Must always have some other constraint than WorkgroupConstraint.
+        assert (
+            len(lcs) > 0
+        ), f"""
+        No constraints found for workgroup dim {workgroup_dim} idx {idx}.
+        {constraint_list_to_str(constraints)}
+        """
+
+        # 7. Dimension 0 must always carry a thread-bearing constraint to avoid
+        # recomputations. Note that in certain cases, where we have a single
+        # wave / thread, this is implicitly correct, but we want to make it
+        # explicit and force the user to think about it.
+        num_thread_bearing_constraints = sum(
+            bool(isinstance(lc, WaveConstraint) or isinstance(lc, ThreadConstraint))
+            for lc in lcs
+        )
+        if workgroup_dim == 0 or (
+            worgroup_dim < len(hw_cons.waves_per_block)
+            and hw_cons.waves_per_block[workgroup_dim] != 1
+        ):
             assert (
-                sum(
-                    bool(
-                        isinstance(lc, WaveConstraint)
-                        or isinstance(lc, ThreadConstraint)
-                    )
-                    for lc in local_constraints
-                )
-                == 1
+                num_thread_bearing_constraints == 1
             ), f"""
-            Workgroup dim 0 idx {idx} must have exactly a threadIdx.x constraint
+            Workgroup dim {workgroup_dim} idx {idx} must have exactly a threadIdx.x constraint
             (either WaveConstraint or ThreadConstraint), otherwise it is
             guaranteed that multiple threads will race.
             {constraint_list_to_str(constraints)}
             """
 
-    ### Stolen elsewhere, needs per-node + constraint verification.
-    # hw_cons = hardware_constraints[0]
-    # idxc = IndexingContext.current()
-    # for constraint in constraints:
-    #     if isinstance(constraint, WorkgroupConstraint) or isinstance(
-    #             constraint, TilingConstraint):
-    #         tile_size = idxc.get_static_value(constraint.tile_size)
-    #         if constraint.dim not in node.vector_shapes:
-    #             continue
-    #         vector_size = node.vector_shapes[constraint.dim]
 
-    #         # No dim scaling for dims with 0 vector size.
-    #         if vector_size == 0:
-    #             continue
+def verify_node_specific_constraints(node: CustomOp, constraints: Sequence[Constraint]):
+    """
+    Centralize node-specific constraint verification.
+    This should be called after node.vector_shapes has been derived
 
-    #         wave_count = 1
-    #         if isinstance(constraint, WorkgroupConstraint):
-    #             wave_count = hw_cons.waves_per_block[constraint.workgroup_dim]
-    #         if tile_size is None or wave_count is None or vector_size is None:
-    #             raise ValueError(
-    #                 "Tile size, wave count and vector size must be statically known"
-    #             )
-    #         if (tile_size % wave_count != 0
-    #                 or (tile_size / wave_count) % vector_size != 0):
-    #             raise ValueError(
-    #                 f"Tile size must be divisible by wave count and vector size, got: "
-    #                 f"tile_size={tile_size}, wave_count={wave_count}, vector_size={vector_size}"
-    #             )
-    #         dim_scaling[
-    #             constraint.dim] = tile_size // wave_count // vector_size
+    Lifted from get_dim_scaling, cleanup and TODO doc this.
+    """
+
+    hw_cons = hardware_constraints[0]
+    idxc = IndexingContext.current()
+    for constraint in constraints:
+        if not isinstance(constraint, WorkgroupConstraint) and not isinstance(
+            constraint, TilingConstraint
+        ):
+            continue
+
+        tile_size = idxc.get_static_value(constraint.tile_size)
+        if constraint.dim not in node.vector_shapes:
+            continue
+        vector_size = node.vector_shapes[constraint.dim]
+
+        # No dim scaling for dims with 0 vector size.
+        if vector_size == 0:
+            continue
+
+        wave_count = 1
+        if isinstance(constraint, WorkgroupConstraint):
+            wave_count = hw_cons.waves_per_block[constraint.workgroup_dim]
+        if tile_size is None or wave_count is None or vector_size is None:
+            raise ValueError(
+                "Tile size, wave count and vector size must be statically known"
+            )
+        if tile_size % wave_count != 0 or (tile_size / wave_count) % vector_size != 0:
+            raise ValueError(
+                f"Tile size must be divisible by wave count and vector size, got: "
+                f"tile_size={tile_size}, wave_count={wave_count}, vector_size={vector_size}"
+            )
+        dim_scaling[constraint.dim] = tile_size // wave_count // vector_size

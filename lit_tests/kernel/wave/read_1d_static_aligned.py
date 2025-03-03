@@ -22,6 +22,7 @@ from iree.turbine.kernel.wave.utils import (
     get_default_compile_config,
     print_trace,
     run_test,
+    try_apply_pass,
 )
 
 
@@ -45,7 +46,7 @@ def harness_1d_global_mem(build_constraints_fun, kernel_fun, *args, **kwargs):
         trace: CapturedTrace = lw._trace()
         graph_passes = lw.build_initial_pass_pipeline(trace)
         for p in graph_passes:
-            lw.try_apply_pass(p, trace, ["all"])
+            try_apply_pass(p, trace, ["all"])
 
         idxc: IndexingContext = IndexingContext.current()
         lw.infer_grid_shape(idxc)
@@ -59,18 +60,17 @@ def harness_1d_global_mem(build_constraints_fun, kernel_fun, *args, **kwargs):
 
 
 def build_block_constraints(*args, **kwargs) -> Sequence[tkw.Constraint]:
-    constraints: list[tkw.Constraint] = []
-    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
-    constraints += [tkw.ThreadConstraint(M, 1)]
-    constraints += [
+    constraints: list[tkw.Constraint] = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),  # Each block handles BLOCK_M elements
+        tkw.ThreadConstraint(M, 1),  # Each thread handles 1 element
         tkw.HardwareConstraint(
             threads_per_wave=64,
-            waves_per_block=kwargs["waves_per_block"]
-            if "waves_per_block" in kwargs
-            else (1, 1, 1),
+            threads_per_block=kwargs["threads_per_block"]
+            if "threads_per_block" in kwargs
+            else (64, 1, 1),
             # One must always specify mma_type or vector_shapes.
             vector_shapes=kwargs["vector_shapes"] if "vector_shapes" in kwargs else {},
-        )
+        ),
     ]
     return constraints
 
@@ -79,12 +79,12 @@ def static_config_1xwave_block_1xvector_1xload_1xstore():
     return {
         "static_symbols": {
             M: 128,
-            BLOCK_M: 1,
+            BLOCK_M: 128,
             ELEMENTS_PER_LOAD: 1,
             ELEMENTS_PER_STORE: 1,
         },
         "vector_shapes": {M: 1},
-        "waves_per_block": (1, 1, 1),
+        "threads_per_block": (64, 1, 1),
         # "dynamic_symbols": [M],
         "canonicalize": {True},
     }
