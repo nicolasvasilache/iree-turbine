@@ -15,7 +15,7 @@ from ..compiler.ir import (
     Value,
 )
 from typing import Optional, Callable, Any, List, Tuple, Sequence
-from .._support.tracing import CapturedTrace
+from .._support.tracing import CapturedTrace, IndexingContext
 from .._support.indexing import IndexExpr, IndexingContext, IndexSymbol, IndexSequence
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
@@ -68,6 +68,23 @@ import iree.runtime as rt
 # TODO: Monkey-patching f16 support, need to fix in iree.
 import numpy
 import ctypes
+
+
+def get_vector_shapes_from_manually_specified_indexing(
+    node: CustomOp,
+) -> dict[IndexSymbol, int]:
+    if not hasattr(node, "manually_specified_indexing"):
+        return None
+    idxc = IndexingContext.current()
+    return dict(
+        zip(
+            node.manually_specified_indexing.keys(),
+            [
+                val.subs(idxc.subs) if isinstance(val, IndexExpr) else val
+                for val in node.manually_specified_indexing.values()
+            ],
+        )
+    )
 
 
 def try_apply_pass(

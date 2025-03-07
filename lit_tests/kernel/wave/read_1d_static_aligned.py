@@ -78,8 +78,6 @@ def build_block_constraints(*args, **kwargs) -> Sequence[tkw.Constraint]:
             threads_per_block=kwargs["threads_per_block"]
             if "threads_per_block" in kwargs
             else (64, 1, 1),
-            # One must always specify mma_type or vector_shapes.
-            vector_shapes=kwargs["vector_shapes"] if "vector_shapes" in kwargs else {},
         ),
     ]
     return constraints
@@ -88,8 +86,8 @@ def build_block_constraints(*args, **kwargs) -> Sequence[tkw.Constraint]:
 def static_config_1xwave_block_1xvector_1xload_1xstore():
     return {
         "static_symbols": {
-            M: 128,
-            BLOCK_M: 128,
+            M: 256,
+            BLOCK_M: 256,
             ITERATIONS_PER_THREAD_M: 1,
             ELEMENTS_PER_LOAD: 2,
             ELEMENTS_PER_STORE: 2,
@@ -100,17 +98,28 @@ def static_config_1xwave_block_1xvector_1xload_1xstore():
         # Or IOW that threads_per_block, ITERATIONS_PER_THREAD_M,
         # ELEMENTS_PER_LOAD and vector_shapes agree.
         "threads_per_block": (64, 1, 1),
-        "vector_shapes": {M: ITERATIONS_PER_THREAD_M},
         # "dynamic_symbols": [M],
         "canonicalize": {True},
     }
 
 
+from collections import OrderedDict
+
+
 def single_read(
     a: tkl.Memory[M, ADDRESS_SPACE, tkl.f16], b: tkl.Memory[M, ADDRESS_SPACE, tkl.f16]
 ):
-    a_reg = tkw.read(a, elements_per_thread=ELEMENTS_PER_LOAD)
-    tkw.write(a_reg, a, elements_per_thread=ELEMENTS_PER_STORE)
+    a_reg = tkw.read(
+        a,
+        elements_per_thread=ELEMENTS_PER_LOAD,
+        manually_specified_indexing=OrderedDict([(M, 1)]),
+    )
+    tkw.write(
+        a_reg,
+        a,
+        elements_per_thread=ELEMENTS_PER_STORE,
+        manually_specified_indexing=OrderedDict([(M, 1)]),
+    )
 
 
 @run_test

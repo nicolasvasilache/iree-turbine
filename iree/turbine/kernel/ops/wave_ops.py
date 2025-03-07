@@ -19,8 +19,8 @@ import torch.fx as fx
 
 from ..lang.wave_types import Memory, Register, IndexMapping
 from ..lang.global_symbols import *
-from .._support.indexing import IndexExpr, IndexSymbol, IndexSequence
 from .._support.dtype import DataType, i1
+from .._support.indexing import IndexExpr, IndexSymbol, IndexSequence
 from .._support.regions import RegionGraph
 from .base import OpDispatcher
 import numpy as np
@@ -414,6 +414,11 @@ class CustomOp(ABC):
         if hasattr(self.fx_node, "index") and self.fx_node.index:
             vars_list.append(f"index={self.fx_node.index}")
         vars_str = ", ".join(vars_list)
+        if hasattr(self, "manually_specified_indexing"):
+            return f"""{self.tkw_op_name}({vars_str})
+            type({self.fx_node.type})
+            manually_specified_indexing({self.manually_specified_indexing})"""
+
         return f"""{self.tkw_op_name}({vars_str})
         type({self.fx_node.type})
         indexing_dims({self.indexing_dims if hasattr(self, 'indexing_dims') else None})
@@ -1192,8 +1197,13 @@ class MMA(CustomOp):
         custom_str += f"rhs={self.rhs} (index = {self.rhs_index}), "
         custom_str += f"acc={self.acc} (index = {self.acc_index}))"
         custom_str += f"\n\ttype({self.fx_node.type})"
-        custom_str += f"\n\tindexing_dims({self.indexing_dims if hasattr(self, 'indexing_dims') else None})"
-        custom_str += f"\n\tvector_shapes({self.vector_shapes if hasattr(self, 'vector_shapes') else None})"
+        if hasattr(self, "manually_specified_indexing"):
+            custom_str += (
+                f"\n\tmanually_specified_indexing({self.manually_specified_indexing})"
+            )
+        else:
+            custom_str += f"\n\tindexing_dims({self.indexing_dims if hasattr(self, 'indexing_dims') else None})"
+            custom_str += f"\n\tvector_shapes({self.vector_shapes if hasattr(self, 'vector_shapes') else None})"
         return custom_str
 
     def align_index(self, constraints: list["Constraint"]) -> None:
@@ -1221,6 +1231,7 @@ class Read(CustomOp):
     mapping: Optional[IndexMapping] = None
     mapping_dynamic_vals: tuple[fx.Node, ...] = ()
     _write_dependency: Optional[list[fx.Node]] = None
+    manually_specified_indexing: Optional[OrderedDict[IndexExpr, IndexExpr]] = None
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -1524,6 +1535,7 @@ class Write(CustomOp):
     elements_per_thread: Optional[Any]
     mapping: Optional[IndexMapping] = None
     mapping_dynamic_vals: tuple[fx.Node, ...] = ()
+    manually_specified_indexing: Optional[OrderedDict[IndexExpr, IndexExpr]] = None
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:

@@ -42,6 +42,7 @@ from .utils import (
     simplify_index,
     get_mma_dimensional_mapping,
     get_hardware_constraint,
+    get_vector_shapes_from_manually_specified_indexing,
     subs_idxc,
     get_inputs,
     get_users,
@@ -452,7 +453,10 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
         if isinstance(custom, (Output, NestedRegionOp)):
             continue
         assert custom.index, f"Index not set for node {custom.fx_node}"
-        if not custom.vector_shapes:
+
+        # TODO: it seems wrong for the verifier to be a catchall for setting
+        # vector shapes.
+        if False and not custom.vector_shapes:
             # If vector_shapes is not set, see if it can be derived from the hardware constraints.
             hw_constraint = get_hardware_constraint(constraints)
             update_vector_shapes = [
@@ -462,6 +466,7 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
                 custom.vector_shapes = {}
                 for dim in update_vector_shapes:
                     custom.vector_shapes[dim] = hw_constraint.vector_shapes[dim]
+
         assert custom.vector_shapes, f"Vector shapes not set for node {custom.fx_node}"
 
 
@@ -501,7 +506,9 @@ def set_node_indices(
         ]
     graph_passes += [
         partial(set_derived_index, trace),
-        partial(resolve_thread_shapes, trace, constraints),
+        # Reolving thread shapes properly should be done at the program level,
+        # not magically.
+        # partial(resolve_thread_shapes, trace, constraints),
         partial(verify_nodes, trace, constraints),
     ]
     for p in graph_passes:
@@ -669,18 +676,18 @@ def populate_read_write_source_indices(
         workgroup_constraints
     )
 
+    vector_shapes = get_vector_shapes_from_manually_specified_indexing(node)
+    if not vector_shapes:
+        vector_shapes = hardware_constraint.vector_shapes
+
     index: dict[IndexSymbol, IndexSequence] = {}
     for dim in node.indexing_dims:
         elements_per_thread = (
             1
-            if not is_contiguous_dim(
-                dim, node.indexing_dims, hardware_constraint.vector_shapes
-            )
+            if not is_contiguous_dim(dim, node.indexing_dims, vector_shapes)
             else node.elements_per_thread
         )
-        stride = compute_stride(
-            node.indexing_dims, hardware_constraint.vector_shapes, dim
-        )
+        stride = compute_stride(node.indexing_dims, vector_shapes, dim)
         wg_constraint = [x for x in workgroup_constraints if x.dim == dim]
         if not wg_constraint:
             continue
@@ -695,7 +702,7 @@ def populate_read_write_source_indices(
         index[dim] = hardware_constraint.apply_read_write_thread_mapping(
             dim, wg_constraint[0].workgroup_dim, elements_per_thread, stride
         )
-    return [(node, index, hardware_constraint.vector_shapes)]
+    return [(node, index, vector_shapes)]
 
 
 def combine_indices(
@@ -742,7 +749,12 @@ def add_nodes_to_sources(
             vector_shapes = (
                 custom.vector_shapes if custom.vector_shapes else source_vector_shapes
             )
-            sources.append((custom, source_index, vector_shapes))
+            manual_vector_shapes = get_vector_shapes_from_manually_specified_indexing(
+                custom
+            )
+            assert (
+                manual_vector_shapes is None or manual_vector_shapes == vector_shapes
+            ), f"derived vector_shapes {vector_shapes} does not match expected manually specified vector_shapes {manual_vector_shapes}"
     return sources, reduction
 
 

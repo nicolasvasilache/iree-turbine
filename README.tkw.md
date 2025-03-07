@@ -282,21 +282,29 @@ occurrence location):
 1. in `substitute_vector_shapes` where they are specialized in-place and must
 become static
 1. index_sequence_analysis:
-a. `populate_read_write_source_indices`: read/write vector_shapes are derived from hw_cstrs
+a. `populate_read_write_source_indices`: return exactly
+`hardware_constraint.vector_shapes`, so it never even tries to infer anything
+```
+[(node, index, hardware_constraint.vector_shapes)]
+```
 b. `get_mma_dimensional_mapping`: tkw.mma op shapes overrides:
 ```
 custom.vector_shapes.update(hardware_constraint.vector_shapes)
 ```
 Such overrides are used to specify batch dimensions that should have vector_size
 == 0.
-c. verify_nodes says
+c. verify_nodes is a catchall for setting vector_shapes for nodes that haven't
+been set
 `# If vector_shapes is not set, see if it can be derived from the hardware constraints.`
 This also relates to the derived `CustomOp.vector_shapes`
 Note 1: it may be possible to incorrectly override load-bearing dimensions and
 this should be hardened.
-1. in `wave/utils.py`: `is_reshape_needed`, `get_hardware_vector_size`,
+
+Later, per-node vector_shapes is used as follows:
+1. in `wave/utils.py`: `add_reshape_if_needed / is_reshape_needed`,
+`get_hardware_vector_size`,
 `get_hardware_vector_map` via custom.vector_shapes.
-1. in expansion unrolling, custom.vector_shapes is later used to unroll:
+1. in expansion unrolling, custom.vector_shapes determines unrolling:
 ```
 dim_scaling[constraint.dim] = tile_size // distribution_factor // vector_size
 ```
