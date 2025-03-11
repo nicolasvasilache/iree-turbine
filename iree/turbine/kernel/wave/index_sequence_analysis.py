@@ -682,16 +682,15 @@ def populate_read_write_source_indices(
 
     index: dict[IndexSymbol, IndexSequence] = {}
     for dim in node.indexing_dims:
-        elements_per_thread = (
-            1
-            if not is_contiguous_dim(dim, node.indexing_dims, vector_shapes)
-            else node.elements_per_thread
-        )
-        stride = compute_stride(node.indexing_dims, vector_shapes, dim)
         wg_constraint = [x for x in workgroup_constraints if x.dim == dim]
+        # If this dimension is not mapped to Workgroups then it is not mapped to
+        # threads either.
+        # TODO: remove this artificial limitation.
         if not wg_constraint:
             continue
+
         thread_constraint = [x for x in thread_constraints if x.dim == dim]
+        # If dhis dimension is mapped to threads, we are in SIMT mode.
         if thread_constraint:
             tc = thread_constraint[0]
             elements_per_thread = (
@@ -699,6 +698,16 @@ def populate_read_write_source_indices(
                 * tc.tile_size
                 * hardware_constraint.threads_per_block[idx_to_dim[tc.dim]]
             )
+        else:
+            # Otherwise we are in in-between mode: dim may be either mapped to
+            # WarpConstraint, TilingConstraint or UnrollingConstraint and the
+            # "vector_shapes" determines whether
+            elements_per_thread = (
+                1
+                if not is_contiguous_dim(dim, node.indexing_dims, vector_shapes)
+                else node.elements_per_thread
+            )
+            stride = compute_stride(node.indexing_dims, vector_shapes, dim)
         index[dim] = hardware_constraint.apply_read_write_thread_mapping(
             dim, wg_constraint[0].workgroup_dim, elements_per_thread, stride
         )

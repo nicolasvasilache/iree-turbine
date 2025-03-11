@@ -89,8 +89,8 @@ def static_config_1xwave_block_1xvector_1xload_1xstore():
             M: 256,
             BLOCK_M: 256,
             ITERATIONS_PER_THREAD_M: 1,
-            ELEMENTS_PER_LOAD: 2,
-            ELEMENTS_PER_STORE: 2,
+            ELEMENTS_PER_LOAD: 1,
+            ELEMENTS_PER_STORE: 1,
         },
         # It is the user's responsibility to ensure that:
         #   threads_per_block * ITERATIONS_PER_THREAD_M * ELEMENTS_PER_LOAD
