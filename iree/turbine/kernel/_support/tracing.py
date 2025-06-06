@@ -408,6 +408,15 @@ class CompiledContext(BaseContext):
             kwargs={},
         )
 
+    # TODO: this should not exist, we should only have a contract that can manipulate traced symbolic shapes
+    def handle_vector_batched_dot(self, op, lhs, rhs, acc=None):
+        return self.region_graph.create_proxy(
+            "call_function",
+            target=op,
+            args=(lhs, rhs, acc),
+            kwargs={},
+        )
+
     ### ========================================================================
     ### Shape Manipulation Operations
     ### ========================================================================
