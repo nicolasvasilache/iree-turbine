@@ -46,9 +46,48 @@ from ..compiler.ir import (
     Operation,
 )
 
+from ..wave.compile_options import WaveCompileOptions
+from ..wave.utils.compile_utils import compile_to_vmfb
+from ..wave.utils.run_utils import invoke_vmfb
+
 __all__ = [
     "thread",
 ]
+
+
+def run_vmfb(vmfb, options, args):
+    # Partition arguments into kernel inputs and outputs.
+    # ToDo: we should expose the `usage` as a property in binding desc
+    #       so that we can reduce the code and use `zip``.
+    usage_idx = 0
+    scalar_args = []
+    kernel_inputs, kernel_outputs = [], []
+    for arg in args:
+        if not isinstance(arg, torch.Tensor):
+            scalar_args.append(arg)
+            continue
+        usage = kernel_sig.kernel_buffer_bindings[usage_idx].kernel_buffer_type.usage
+        usage_idx += 1
+        if usage == kernel_codegen.KernelBufferUsage.INPUT:
+            kernel_inputs.append(arg)
+        if usage == kernel_codegen.KernelBufferUsage.OUTPUT:
+            kernel_outputs.append(arg)
+    kernel_inputs.extend(scalar_args)
+
+    invoke_vmfb(vmfb, options, kernel_inputs, kernel_outputs, run_on_default_device=True)
+
+
+def compile_and_run_on_cpu(asm: str, kernel_sig, args):
+    options = WaveCompileOptions()
+    options.device = "local-task"
+    options.backend = "llvm-cpu"
+    # options.target = "llvm-cpu"
+    # options.print_ir_after_all = True
+    options.flags = [
+        "--iree-llvmcpu-target-cpu=generic",
+    ]
+    vmfb = compile_to_vmfb(asm, options)
+    run_vmfb(vmfb, kernel_sig, options, args)
 
 
 def thread(*symbolic_shape: IndexExpr):
@@ -146,6 +185,7 @@ class LaunchableThread(Launchable):
         emitter.emit()
         emitter.finish()
 
+        # print(mb.module_op)
         mb.module_op.verify()
 
         return mb, exe, kernel_sig, entrypoint_name
@@ -155,8 +195,7 @@ class LaunchableThread(Launchable):
             args, kwargs
         )
         host_codegen.isolated_test_call(mb, exe, kernel_sig, entrypoint_name)
-
-        print(mb.module_op.get_asm())
+        compile_and_run_on_cpu(mb.module_op.get_asm(), kernel_sig, args)
 
     def aot_execute(self, args, kwargs):
         launch_context = LaunchContext.current()

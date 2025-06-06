@@ -108,6 +108,7 @@ def invoke_vmfb(
     kernel_inputs: list[torch.Tensor],
     kernel_outputs: list[torch.Tensor],
     gpu_func: Optional[Any] = None,
+    run_on_default_device: Optional[bool] = False
 ):
     if options.wave_runtime:
         invoke_with_wave_runtime(options, kernel_inputs, kernel_outputs, gpu_func)
@@ -126,12 +127,13 @@ def invoke_vmfb(
             )
 
     # Select device as the GPU, where input tensors are coming from.
-    device_list = tuple(
-        input.device
-        for input in kernel_inputs + kernel_outputs
-        if isinstance(input, torch.Tensor)
-    )
-    device = get_device_uuid(device_list, device)
+    if not run_on_default_device:
+        device_list = tuple(
+            input.device
+            for input in kernel_inputs + kernel_outputs
+            if isinstance(input, torch.Tensor)
+        )
+        device = get_device_uuid(device_list, device)
 
     rt_config = rt.Config(device)
     device = rt_config.device

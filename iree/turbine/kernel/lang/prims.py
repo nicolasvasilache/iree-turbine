@@ -12,6 +12,7 @@ __all__ = [
     "program_id",
     "constant",
     "exp2",
+    "sqrt",
     "max",
     "sum",
     "dot",
@@ -36,6 +37,7 @@ to_dtype = ops.to_dtype
 
 # Math Operations
 exp2 = ops.exp2
+sqrt = ops.sqrt
 constant = ops.vector_constant
 
 # Reduction Operations

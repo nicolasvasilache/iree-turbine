@@ -239,6 +239,7 @@ BINARY_ARITHMETIC_OPS = [
 
 UNARY_ARITHMETIC_OPS = [
     (tkl.exp2, "exp2"),
+    (tkl.sqrt, "sqrt"),
 ]
 
 
@@ -700,9 +701,12 @@ def _(emitter: ThreadEmitter, node: fx.Node):
         # Use ret in terminatory of body
         # TODO: Flatten return values here.
         flat_ret_values, ret_spec = pytree.tree_flatten((ret))
-        flat_ret_values = [
-            cast_py_value(emitter, value).ir_value for value in flat_ret_values
-        ]
+        if len(flat_ret_values) == 1 and flat_ret_values[0] == None:
+            flat_ret_values = []
+        else:
+            flat_ret_values = [
+                cast_py_value(emitter, value).ir_value for value in flat_ret_values
+            ]
         scf_d.YieldOp(flat_ret_values)
 
     results = forOp.results_
