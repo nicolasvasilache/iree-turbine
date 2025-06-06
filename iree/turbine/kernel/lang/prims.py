@@ -16,6 +16,8 @@ __all__ = [
     "max",
     "sum",
     "dot",
+    # TODO: this should not exist, we should only have a contract that can manipulate traced symbolic shapes
+    "batched_dot",
     "for_loop",
     "load",
     "store",
@@ -44,6 +46,8 @@ constant = ops.vector_constant
 max = ops.vector_max
 sum = ops.vector_sum
 dot = ops.vector_dot
+# TODO: this should not exist, we should only have a contract that can manipulate traced symbolic shapes
+batched_dot = ops.vector_batched_dot
 
 # Control Flow Operations
 for_loop = ops.for_loop

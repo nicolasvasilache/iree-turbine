@@ -570,6 +570,53 @@ def _(emitter: ThreadEmitter, node: fx.Node):
     emitter.bind_node_proxy(node, IRProxyValue(result))
 
 
+# TODO: this should not exist, we should only have a contract that can manipulate traced symbolic shapes
+@handle_op(tkl.batched_dot)
+def _(emitter: ThreadEmitter, node: fx.Node):
+    try:
+        lhs, rhs, acc = node.args
+        lhs = cast_vector(emitter, lhs)
+        rhs = cast_vector(emitter, rhs)
+        acc = cast_vector(emitter, acc)
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    vector_type = VectorType(lhs.type)
+    element_type = vector_type.element_type
+    rank = vector_type.rank
+
+    b, n, m, k = (
+        AffineExpr.get_dim(0),
+        AffineExpr.get_dim(1),
+        AffineExpr.get_dim(2),
+        AffineExpr.get_dim(3),
+    )
+    indexing_maps = [
+        AffineMap.get(4, 0, [b, n, k]),
+        AffineMap.get(4, 0, [b, k, m]),
+        AffineMap.get(4, 0, [b, n, m]),
+    ]
+    indexing_maps_attr = [AffineMapAttr.get(map) for map in indexing_maps]
+    # TODO: Bad hack, please fix.
+    iterator_types = ArrayAttr.get(
+        [
+            Attribute.parse("#vector.iterator_type<parallel>"),
+            Attribute.parse("#vector.iterator_type<parallel>"),
+            Attribute.parse("#vector.iterator_type<parallel>"),
+            Attribute.parse("#vector.iterator_type<reduction>"),
+        ]
+    )
+    result = vector_d.ContractionOp(
+        acc.type,
+        lhs,
+        rhs,
+        acc,
+        indexing_maps_attr,
+        iterator_types,
+    ).result
+    emitter.bind_node_proxy(node, IRProxyValue(result))
+
+
 def register_reduction(op):
     def decorator(f: Callable[[IrType, NodeAttrs], vector_d.CombiningKind]):
         @handle_op(op)
