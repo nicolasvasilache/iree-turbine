@@ -10,6 +10,7 @@ from .base import (
 
 __all__ = [
     "exp2",
+    "sqrt",
     "vector_constant",
 ]
 
@@ -19,4 +20,10 @@ def exp2(val): ...
 
 
 @define_op
-def vector_constant(shape: Tuple[int, ...], dtype, value: int | float) -> "Vector": ...
+def sqrt(val):
+    ...
+
+
+@define_op
+def vector_constant(shape: Tuple[int, ...], dtype, value: int | float) -> "Vector":
+    ...

@@ -32,7 +32,8 @@ def compile_to_vmfb(
     options: WaveCompileOptions,
 ):
 
-    flags = [
+    flags = options.flags if hasattr(options, 'flags') else []
+    flags = flags + [
         f"--iree-hal-target-backends={options.backend}",
         "--iree-vm-bytecode-module-strip-source-map=true",
         "--iree-opt-strip-assertions=true",

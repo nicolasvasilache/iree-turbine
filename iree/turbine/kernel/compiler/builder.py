@@ -26,6 +26,7 @@ from .ir import (
     VectorType,
     arith_d,
     math_d,
+    vector_d,
     builtin_d,
     F16Type,
     F32Type,
@@ -308,6 +309,9 @@ class _ScalarBuilder:
 
     def unary_exp2_float(self, val: IRProxyValue) -> IRProxyValue:
         return IRProxyValue(math_d.exp2(val.ir_value))
+    
+    def unary_sqrt_float(self, val: IRProxyValue) -> IRProxyValue:
+        return IRProxyValue(math_d.sqrt(val.ir_value))
 
 
 ScalarBuilder = _ScalarBuilder()

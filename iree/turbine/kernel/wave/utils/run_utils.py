@@ -104,6 +104,7 @@ def invoke_vmfb(
     bound_scalar_symbols: dict[IndexSymbol, int] = {},
     dynamic_symbols: list[int] = [],
     gpu_func: Optional[Any] = None,
+    run_on_default_device: Optional[bool] = False
 ):
     if options.wave_runtime:
         invoke_with_wave_runtime(
@@ -130,12 +131,13 @@ def invoke_vmfb(
             )
 
     # Select device as the GPU, where input tensors are coming from.
-    device_list = tuple(
-        input.device
-        for input in kernel_inputs + kernel_outputs
-        if isinstance(input, torch.Tensor)
-    )
-    device = get_device_uuid(device_list, device)
+    if not run_on_default_device:
+        device_list = tuple(
+            input.device
+            for input in kernel_inputs + kernel_outputs
+            if isinstance(input, torch.Tensor)
+        )
+        device = get_device_uuid(device_list, device)
 
     rt_config = rt.Config(device)
     device = rt_config.device
