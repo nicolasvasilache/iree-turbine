@@ -146,6 +146,7 @@ class LaunchableThread(Launchable):
         emitter.emit()
         emitter.finish()
 
+        # print(mb.module_op)
         mb.module_op.verify()
 
         return mb, exe, kernel_sig, entrypoint_name
@@ -156,7 +157,46 @@ class LaunchableThread(Launchable):
         )
         host_codegen.isolated_test_call(mb, exe, kernel_sig, entrypoint_name)
 
-        print(mb.module_op.get_asm())
+        from ..wave.compile import WaveKernel
+        from ..wave.compile_options import WaveCompileOptions
+        from ..wave.utils.compile_utils import compile_to_vmfb
+        from ..wave.utils.run_utils import invoke_vmfb
+        import iree.turbine.kernel.lang as tkl
+        options = WaveCompileOptions()
+        options.device = "local-task"
+        options.backend = "llvm-cpu"
+        # options.target = "llvm-cpu"
+        # options.print_ir_after_all = True
+        options.flags = [
+            # "--compile-from=input",
+            # "--compile-from=executable-sources",
+            # "--compile-to=hal",
+            # "--compile-to=executable-targets",
+            "--iree-llvmcpu-target-cpu=generic",
+        ]
+        asm = mb.module_op.get_asm()
+        vmfb = compile_to_vmfb(asm, options)
+
+        # Partition arguments into kernel inputs and outputs.
+        # ToDo: we should expose the `usage` as a property in binding desc
+        #       so that we can reduce the code and use `zip``.
+        usage_idx = 0
+        scalar_args = []
+        kernel_inputs, kernel_outputs = [], []
+        for arg in args:
+            if not isinstance(arg, torch.Tensor):
+                scalar_args.append(arg)
+                continue
+            usage = kernel_sig.kernel_buffer_bindings[usage_idx].kernel_buffer_type.usage
+            usage_idx += 1
+            if usage == kernel_codegen.KernelBufferUsage.INPUT:
+                kernel_inputs.append(arg)
+            if usage == kernel_codegen.KernelBufferUsage.OUTPUT:
+                kernel_outputs.append(arg)
+        kernel_inputs.extend(scalar_args)
+
+        invoke_vmfb(vmfb, options, kernel_inputs, kernel_outputs, run_on_default_device=True)
+
 
     def aot_execute(self, args, kwargs):
         launch_context = LaunchContext.current()

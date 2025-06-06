@@ -10,12 +10,18 @@ from .base import (
 
 __all__ = [
     "exp2",
+    "sqrt",
     "vector_constant",
 ]
 
 
 @define_op
 def exp2(val):
+    ...
+
+
+@define_op
+def sqrt(val):
     ...
 
 
