@@ -4,6 +4,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from symtable import SymbolTable
 from typing import (
     Type,
     Callable,
@@ -54,8 +55,47 @@ __all__ = [
     "thread",
 ]
 
+# The key name for GPUPipelineOptionsAttr in the translation info config dictionary.
+GPU_PIPELINE_OPTIONS_KEY = "gpu_pipeline_options"
+# The key name for llvm_func_attrs attribute in the translation info config dictionary.
+LLVM_FUNC_ATTRS_KEY = "llvm_func_attrs"
+# The Key name for the 'amdgpu-waves-per-eu' within the llvm_func_attrs attribute.
+WAVES_PER_EU_KEY = "amdgpu-waves-per-eu"
 
-def run_vmfb(vmfb, options, args):
+
+from iree.compiler import ir  # type: ignore
+from iree.compiler.dialects import iree_gpu, iree_codegen  # type: ignore
+
+def get_translation_info_config(
+    pipeline_options: iree_gpu.PipelineOptionsAttr, waves_per_eu: int
+) -> ir.DictAttr:
+    """
+    Example IR
+    translation_info = #iree_codegen.translation_info<
+                    pipeline = LLVMGPUVectorDistribute workgroup_size = [512, 1, 1] subgroup_size = 64,
+                    {gpu_pipeline_options = #iree_gpu.pipeline_options<...>,
+                     llvm_func_attrs = {"amdgpu-waves-per-eu" = "3"}
+                    }
+                >
+    """
+    waves_per_eu_str = str(waves_per_eu)
+
+    # Create the waves_per_eu dictionary attribute.
+    waves_per_eu_dict = ir.DictAttr.get(
+        {WAVES_PER_EU_KEY: ir.StringAttr.get(waves_per_eu_str)}
+    )
+
+    config_dict = ir.DictAttr.get(
+        {
+            GPU_PIPELINE_OPTIONS_KEY: pipeline_options,
+            LLVM_FUNC_ATTRS_KEY: waves_per_eu_dict,
+        }
+    )
+
+    return config_dict
+
+
+def run_vmfb(vmfb, kernel_sig, options, args):
     # Partition arguments into kernel inputs and outputs.
     # ToDo: we should expose the `usage` as a property in binding desc
     #       so that we can reduce the code and use `zip``.
@@ -86,6 +126,15 @@ def compile_and_run_on_cpu(asm: str, kernel_sig, args):
     options.flags = [
         "--iree-llvmcpu-target-cpu=generic",
     ]
+    vmfb = compile_to_vmfb(asm, options)
+    run_vmfb(vmfb, kernel_sig, options, args)
+
+def compile_and_run_on_gpu(asm: str, kernel_sig, args):
+    options = WaveCompileOptions()
+    options.backend = "rocm"
+    options.device = "hip"
+    options.target = "gfx942"
+    options.print_ir_after_all = True
     vmfb = compile_to_vmfb(asm, options)
     run_vmfb(vmfb, kernel_sig, options, args)
 
@@ -185,7 +234,7 @@ class LaunchableThread(Launchable):
         emitter.emit()
         emitter.finish()
 
-        # print(mb.module_op)
+        print(mb.module_op)
         mb.module_op.verify()
 
         return mb, exe, kernel_sig, entrypoint_name
@@ -195,7 +244,27 @@ class LaunchableThread(Launchable):
             args, kwargs
         )
         host_codegen.isolated_test_call(mb, exe, kernel_sig, entrypoint_name)
-        compile_and_run_on_cpu(mb.module_op.get_asm(), kernel_sig, args)
+
+        gpu: bool = True
+        if gpu:
+            with ir.Context() as context:
+                # Find the module_op and the function entry point under the stream executable `exe`.
+                stream_executable_module = exe.def_module.module_op
+                symbol_table = ir.SymbolTable(stream_executable_module)
+                def_func_op = symbol_table[entrypoint_name]
+                # Build the iree_codegen attr for vector distribution.
+                pipeline_attr = iree_codegen.DispatchLoweringPassPipelineAttr.get(
+                    iree_codegen.DispatchLoweringPassPipeline.LLVMGPUVectorDistribute
+                )
+                translation_info = iree_codegen.TranslationInfoAttr.get(
+                    pipeline_attr, None, workgroup_size=[64, 1, 1], subgroup_size=64
+                )
+                # Attach as a func attr.
+                def_func_op.attributes["translation_info"] = translation_info
+                # Compile and run on GPU.
+                compile_and_run_on_gpu(mb.module_op.get_asm(), kernel_sig, args)
+        else: 
+            compile_and_run_on_cpu(mb.module_op.get_asm(), kernel_sig, args)
 
     def aot_execute(self, args, kwargs):
         launch_context = LaunchContext.current()

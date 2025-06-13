@@ -65,6 +65,7 @@ from .ir import (
     IrType,
     Location,
     MemRefType,
+    Operation,
     ShapedType,
     Value,
     VectorType,
@@ -559,11 +560,106 @@ def _(emitter: ThreadEmitter, node: fx.Node):
             Attribute.parse("#vector.iterator_type<reduction>"),
         ]
     )
+
+
+    l_lhs, l_rhs, l_acc = lhs, rhs, acc
+    if lhs.type.shape == [32, 32]: # 32x32x32
+        # A: shape = 32x8, layout = layoutA
+        layout_lhs = Attribute.parse(
+            "#iree_vector_ext.nested_layout<"
+            + "subgroup_tile    = [1, 1], "
+            + "batch_tile       = [1, 1], "
+            + "outer_tile       = [1, 4], "
+            + "thread_tile      = [32, 2], "
+            + "element_tile     = [1, 4], "
+            + "subgroup_strides = [1, 1], "
+            + "thread_strides   = [1, 32] "
+            + ">"
+        )
+    elif lhs.type.shape == [32, 128]: # 32x32x128
+        # A: shape = 32x8, layout = layoutA
+        layout_lhs = Attribute.parse(
+            "#iree_vector_ext.nested_layout<"
+            + "subgroup_tile    = [1, 1], "
+            + "batch_tile       = [1, 1], "
+            + "outer_tile       = [1, 16], "
+            + "thread_tile      = [32, 2], "
+            + "element_tile     = [1, 4], "
+            + "subgroup_strides = [1, 1], "
+            + "thread_strides   = [1, 32] "
+            + ">"
+        )
+    else:
+        raise Exception("LHS unsupported shape")
+
+
+    if rhs.type.shape == [32, 32]: # 32x32x32
+        # B: shape = 8x32, layout = layoutB
+        layout_rhs = Attribute.parse(
+            "#iree_vector_ext.nested_layout<"
+            + "subgroup_tile    = [1, 1], "
+            + "batch_tile       = [1, 1], "
+            + "outer_tile       = [4, 1], "
+            + "thread_tile      = [2, 32], "
+            + "element_tile     = [4, 1], "
+            + "subgroup_strides = [1, 1], "
+            + "thread_strides   = [32, 1] "
+            + ">"
+        )
+    elif rhs.type.shape == [128, 32]: # 32x32x128
+        # B: shape = 8x32, layout = layoutB
+        layout_rhs = Attribute.parse(
+            "#iree_vector_ext.nested_layout<"
+            + "subgroup_tile    = [1, 1], "
+            + "batch_tile       = [1, 1], "
+            + "outer_tile       = [16, 1], "
+            + "thread_tile      = [2, 32], "
+            + "element_tile     = [4, 1], "
+            + "subgroup_strides = [1, 1], "
+            + "thread_strides   = [32, 1] "
+            + ">"
+        )
+    else:
+        raise Exception("RHS unsupported shape")
+    
+    if acc.type.shape == [32, 32] and lhs.type.shape == [32, 32]: # 32x32x32
+        # C: shape = 32x32, layout = layoutC
+        layout_acc = Attribute.parse(
+            "#iree_vector_ext.nested_layout<"
+            + "subgroup_tile    = [1, 1], "
+            + "batch_tile       = [1, 1], "
+            + "outer_tile       = [4, 1], "
+            + "thread_tile      = [2, 32], "
+            + "element_tile     = [4, 1], "
+            + "subgroup_strides = [1, 1], "
+            + "thread_strides   = [32, 1] "
+            + ">"
+        )
+    elif acc.type.shape == [32, 32] and lhs.type.shape == [32, 128]: # 32x32x128
+        # C: shape = 32x32, layout = layoutC
+        layout_acc = Attribute.parse(
+            "#iree_vector_ext.nested_layout<"
+            + "subgroup_tile    = [1, 1], "
+            + "batch_tile       = [1, 1], "
+            + "outer_tile       = [4, 1], "
+            + "thread_tile      = [2, 32], "
+            + "element_tile     = [4, 1], "
+            + "subgroup_strides = [1, 1], "
+            + "thread_strides   = [32, 1] "
+            + ">"
+        )
+    else:
+        raise Exception("ACC unsupported shape")
+
+    l_lhs = Operation.create("iree_vector_ext.to_layout", [lhs.type], [lhs], {"layout" : layout_lhs})
+    l_rhs = Operation.create("iree_vector_ext.to_layout", [rhs.type], [rhs], {"layout" : layout_rhs})
+    l_acc = Operation.create("iree_vector_ext.to_layout", [acc.type], [acc], {"layout" : layout_acc})
+
     result = vector_d.ContractionOp(
         acc.type,
-        lhs,
-        rhs,
-        acc,
+        l_lhs,
+        l_rhs,
+        l_acc,
         indexing_maps_attr,
         iterator_types,
     ).result
