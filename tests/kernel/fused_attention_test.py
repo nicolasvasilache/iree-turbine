@@ -120,7 +120,7 @@ class Test(unittest.TestCase):
         #   1. Language traced -> PyTorch vs PyTorch reference implementation.
         #   2. Language traced -> MLIR vs Language traced -> PyTorch, potentially instruction by instruction.
         # This should be very useful for debugging and teaching purposes.
-        vBLOCK_M, vBLOCK_N, vBLOCK_K2 = 1, 1, 8
+        vBLOCK_M, vBLOCK_N, vBLOCK_K2 = 32, 32, 32
         assert vM % vBLOCK_M == 0, "only divisible sizes supported for now"
         assert vN % vBLOCK_N == 0, "only divisible sizes supported for now"
         assert vK2 % vBLOCK_K2 == 0, "only divisible sizes supported for now"
