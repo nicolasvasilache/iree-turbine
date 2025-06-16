@@ -300,6 +300,9 @@ def _define_arithmetic_handlers():
             except ValueError as e:
                 raise ValidationError("Malformed arguments") from e
 
+            print(node.graph)
+            print(node)
+
             lhs = cast_py_value(emitter, lhs)
             rhs = cast_py_value(emitter, rhs)
             is_vector, lhs, rhs = binary_broadcast(lhs, rhs)
@@ -568,8 +571,8 @@ def _(emitter: ThreadEmitter, node: fx.Node):
         layout_lhs = Attribute.parse(
             "#iree_vector_ext.nested_layout<"
             + "subgroup_tile    = [1, 1], "
-            + "batch_tile       = [1, 1], "
-            + "outer_tile       = [1, 4], "
+            + "batch_tile       = [1, 4], "
+            + "outer_tile       = [1, 1], "
             + "thread_tile      = [32, 2], "
             + "element_tile     = [1, 4], "
             + "subgroup_strides = [1, 1], "
@@ -581,8 +584,8 @@ def _(emitter: ThreadEmitter, node: fx.Node):
         layout_lhs = Attribute.parse(
             "#iree_vector_ext.nested_layout<"
             + "subgroup_tile    = [1, 1], "
-            + "batch_tile       = [1, 1], "
-            + "outer_tile       = [1, 16], "
+            + "batch_tile       = [1, 16], "
+            + "outer_tile       = [1, 1], "
             + "thread_tile      = [32, 2], "
             + "element_tile     = [1, 4], "
             + "subgroup_strides = [1, 1], "
@@ -598,8 +601,8 @@ def _(emitter: ThreadEmitter, node: fx.Node):
         layout_rhs = Attribute.parse(
             "#iree_vector_ext.nested_layout<"
             + "subgroup_tile    = [1, 1], "
-            + "batch_tile       = [1, 1], "
-            + "outer_tile       = [4, 1], "
+            + "batch_tile       = [4, 1], "
+            + "outer_tile       = [1, 1], "
             + "thread_tile      = [2, 32], "
             + "element_tile     = [4, 1], "
             + "subgroup_strides = [1, 1], "
@@ -611,8 +614,8 @@ def _(emitter: ThreadEmitter, node: fx.Node):
         layout_rhs = Attribute.parse(
             "#iree_vector_ext.nested_layout<"
             + "subgroup_tile    = [1, 1], "
-            + "batch_tile       = [1, 1], "
-            + "outer_tile       = [16, 1], "
+            + "batch_tile       = [16, 1], "
+            + "outer_tile       = [1, 1], "
             + "thread_tile      = [2, 32], "
             + "element_tile     = [4, 1], "
             + "subgroup_strides = [1, 1], "
@@ -622,20 +625,7 @@ def _(emitter: ThreadEmitter, node: fx.Node):
     else:
         raise Exception("RHS unsupported shape")
     
-    if acc.type.shape == [32, 32] and lhs.type.shape == [32, 32]: # 32x32x32
-        # C: shape = 32x32, layout = layoutC
-        layout_acc = Attribute.parse(
-            "#iree_vector_ext.nested_layout<"
-            + "subgroup_tile    = [1, 1], "
-            + "batch_tile       = [1, 1], "
-            + "outer_tile       = [4, 1], "
-            + "thread_tile      = [2, 32], "
-            + "element_tile     = [4, 1], "
-            + "subgroup_strides = [1, 1], "
-            + "thread_strides   = [32, 1] "
-            + ">"
-        )
-    elif acc.type.shape == [32, 32] and lhs.type.shape == [32, 128]: # 32x32x128
+    if acc.type.shape == [32, 32]: # 32x32x32
         # C: shape = 32x32, layout = layoutC
         layout_acc = Attribute.parse(
             "#iree_vector_ext.nested_layout<"
@@ -651,6 +641,8 @@ def _(emitter: ThreadEmitter, node: fx.Node):
     else:
         raise Exception("ACC unsupported shape")
 
+    mma_kind = Attribute.parse("#iree_gpu.mma_layout<MFMA_F32_32x32x8_F16>")
+
     l_lhs = Operation.create("iree_vector_ext.to_layout", [lhs.type], [lhs], {"layout" : layout_lhs})
     l_rhs = Operation.create("iree_vector_ext.to_layout", [rhs.type], [rhs], {"layout" : layout_rhs})
     l_acc = Operation.create("iree_vector_ext.to_layout", [acc.type], [acc], {"layout" : layout_acc})
@@ -663,7 +655,10 @@ def _(emitter: ThreadEmitter, node: fx.Node):
         indexing_maps_attr,
         iterator_types,
     ).result
-    emitter.bind_node_proxy(node, IRProxyValue(result))
+
+    l_result = Operation.create("iree_vector_ext.to_layout", [result.type], [result], {"layout" : layout_acc, "mma_kind" : mma_kind}).result
+
+    emitter.bind_node_proxy(node, IRProxyValue(l_result))
 
 
 # TODO: this should not exist, we should only have a contract that can manipulate traced symbolic shapes
@@ -732,7 +727,7 @@ def emit_reduction(
     emitter: ThreadEmitter,
     node: fx.Node,
     raw_input,
-    axis: int,
+    axis: int | None,
     raw_acc,
     combiner_callback: Callable[[IrType, NodeAttrs], vector_d.CombiningKind],
 ):
@@ -750,7 +745,7 @@ def emit_reduction(
 
     combiner = combiner_callback(element_type, attrs)
 
-    if not axis:
+    if axis is None:
         # Reduce to scalar.
         scalar_result = vector_d.multi_reduction(
             combiner, input, acc, list(range(rank))

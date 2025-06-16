@@ -435,7 +435,7 @@ class CompiledContext(BaseContext):
 
         # Remove broadcast_dimensions from shape.
         shape_with_leading = tuple(
-            dim for i, dim in enumerate(shape) if i not in broadcast_dimensions
+            dim for i, dim in enumerate(shape) if i in broadcast_dimensions
         )
 
         # Broadcast
@@ -447,10 +447,13 @@ class CompiledContext(BaseContext):
         )
 
         # Get the permutation for the transpose.
-        permutation = tuple(
+        permutation_leading = tuple(
+            i for i in range(len(shape)) if i in broadcast_dimensions
+        )
+        permutation_trailing = tuple(
             i for i in range(len(shape)) if i not in broadcast_dimensions
         )
-        permutation = permutation + tuple(broadcast_dimensions)
+        permutation = permutation_leading + permutation_trailing
 
         # Transpose
         return self.region_graph.create_proxy(
