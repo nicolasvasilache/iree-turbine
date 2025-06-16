@@ -11,6 +11,7 @@ __all__ = [
     "is_debug",
     "program_id",
     "constant",
+    "exp",
     "exp2",
     "sqrt",
     "max",
@@ -38,6 +39,7 @@ program_id = ops.thread_program_id
 to_dtype = ops.to_dtype
 
 # Math Operations
+exp = ops.exp
 exp2 = ops.exp2
 sqrt = ops.sqrt
 constant = ops.vector_constant

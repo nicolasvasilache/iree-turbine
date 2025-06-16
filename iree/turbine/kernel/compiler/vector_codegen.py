@@ -239,6 +239,7 @@ BINARY_ARITHMETIC_OPS = [
 ]
 
 UNARY_ARITHMETIC_OPS = [
+    (tkl.exp, "exp"),
     (tkl.exp2, "exp2"),
     (tkl.sqrt, "sqrt"),
 ]
@@ -299,9 +300,6 @@ def _define_arithmetic_handlers():
                 lhs, rhs = node.args
             except ValueError as e:
                 raise ValidationError("Malformed arguments") from e
-
-            print(node.graph)
-            print(node)
 
             lhs = cast_py_value(emitter, lhs)
             rhs = cast_py_value(emitter, rhs)
@@ -592,6 +590,19 @@ def _(emitter: ThreadEmitter, node: fx.Node):
             + "thread_strides   = [1, 32] "
             + ">"
         )
+    elif lhs.type.shape == [32, 8]: # 32x32x8
+        # A: shape = 32x8, layout = layoutA
+        layout_lhs = Attribute.parse(
+            "#iree_vector_ext.nested_layout<"
+            + "subgroup_tile    = [1, 1], "
+            + "batch_tile       = [1, 1], "
+            + "outer_tile       = [1, 1], "
+            + "thread_tile      = [32, 2], "
+            + "element_tile     = [1, 4], "
+            + "subgroup_strides = [1, 1], "
+            + "thread_strides   = [1, 32] "
+            + ">"
+        )
     else:
         raise Exception("LHS unsupported shape")
 
@@ -615,6 +626,19 @@ def _(emitter: ThreadEmitter, node: fx.Node):
             "#iree_vector_ext.nested_layout<"
             + "subgroup_tile    = [1, 1], "
             + "batch_tile       = [16, 1], "
+            + "outer_tile       = [1, 1], "
+            + "thread_tile      = [2, 32], "
+            + "element_tile     = [4, 1], "
+            + "subgroup_strides = [1, 1], "
+            + "thread_strides   = [32, 1] "
+            + ">"
+        )
+    elif rhs.type.shape == [8, 32]: # 32x32x8
+        # B: shape = 8x32, layout = layoutB
+        layout_rhs = Attribute.parse(
+            "#iree_vector_ext.nested_layout<"
+            + "subgroup_tile    = [1, 1], "
+            + "batch_tile       = [1, 1], "
             + "outer_tile       = [1, 1], "
             + "thread_tile      = [2, 32], "
             + "element_tile     = [4, 1], "

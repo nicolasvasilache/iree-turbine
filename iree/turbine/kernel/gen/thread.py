@@ -134,7 +134,7 @@ def compile_and_run_on_gpu(asm: str, kernel_sig, args):
     options.backend = "rocm"
     options.device = "hip"
     options.target = "gfx942"
-    options.print_ir_after_all = True
+    # options.print_ir_after_all = True
     vmfb = compile_to_vmfb(asm, options)
     run_vmfb(vmfb, kernel_sig, options, args)
 
@@ -234,7 +234,7 @@ class LaunchableThread(Launchable):
         emitter.emit()
         emitter.finish()
 
-        print(mb.module_op)
+        # print(mb.module_op)
         mb.module_op.verify()
 
         return mb, exe, kernel_sig, entrypoint_name
