@@ -27,10 +27,10 @@ class Test(unittest.TestCase):
     def testFusedAttention(self):
         @tk.gen.thread(B, H)
         def fused_attention(
-            Q: tkl.InputBuffer[B, H, M, K1, tkl.f32],
-            K: tkl.InputBuffer[B, H, K2, K1, tkl.f32],
-            V: tkl.InputBuffer[B, H, K2, N, tkl.f32],
-            O: tkl.OutputBuffer[B, H, M, N, tkl.f32],
+            Q: tkl.InputBuffer[B, H, M, K1, tkl.f16],
+            K: tkl.InputBuffer[B, H, K2, K1, tkl.f16],
+            V: tkl.InputBuffer[B, H, K2, N, tkl.f16],
+            O: tkl.OutputBuffer[B, H, M, N, tkl.f16],
         ):
             # TODO: Naive mapping for now (1x1 along bxh per workgroup).
             # The goal is to use scf.forall mapping in the future and avoid having to think
@@ -44,11 +44,11 @@ class Test(unittest.TestCase):
 
                 # TODO: how to splat a constant coming from a dim (i.e. K1; for now just use vK1)
                 # k1_val = tkl.constant((BLOCK_M, K1, ), tkl.i32, K1)
-                # k1_val_f = tkl.to_dtype(k1_val, tkl.f32)
-                k1_val_f = tkl.constant((BLOCK_M, K1, ), tkl.f32, float(vK1))
-                one = tkl.constant((BLOCK_M, K1, ), tkl.f32, 1.0)
+                # k1_val_f = tkl.to_dtype(k1_val, tkl.f16)
+                k1_val_f = tkl.constant((BLOCK_M, K1, ), tkl.f16, float(vK1))
+                one = tkl.constant((BLOCK_M, K1, ), tkl.f16, 1.0)
                 dk_sqrt = tkl.sqrt(one / k1_val_f)
-                log2e = tkl.constant((BLOCK_M, K1, ), tkl.f32, vLOG2E)
+                log2e = tkl.constant((BLOCK_M, K1, ), tkl.f16, vLOG2E)
                 qkv_scaling = log2e * dk_sqrt
                 q = q * qkv_scaling
 
@@ -70,9 +70,13 @@ class Test(unittest.TestCase):
                         # TODO: (suggested by Kunwar) use the tkl.mma operation ot set the layout attribute
                         # in a controlled fashion. This will let us activate vector distribution easily on GPU.
                         #
-                        # (BLOCK_M, BLOCK_K2) <- (BLOCK_M, K1) * (K1, BLOCK_K2)
+                        # (BLOCK_M, BLOCK_K2).T <- (K1, BLOCK_K2).T * (BLOCK_M, K1).T
                         qkT = tkl.constant((BLOCK_M, BLOCK_K2), tkl.f32, 0.0)
-                        qkT = tkl.dot(q, kT, qkT) # : (BLOCK_M, BLOCK_K2)
+                        q_d = tkl.transpose(q, (1, 0))
+                        kT_d = tkl.transpose(kT, (1, 0))
+                        qkT_d = tkl.transpose(qkT, (1, 0))
+                        qkT_d = tkl.dot(kT_d, q_d, qkT_d) # : (BLOCK_M, BLOCK_K2)
+                        qkT = tkl.transpose(qkT_d, (1, 0))
 
                         m_j = tkl.max(qkT, axis=1, acc=partial_max) # : (BLOCK_M)
                         e_delta_max = tkl.exp2(partial_max - m_j) # : (BLOCK_M)
@@ -88,15 +92,20 @@ class Test(unittest.TestCase):
                         acc = acc * e_delta_max # : (BLOCK_M, BLOCK_N)
 
                         # (BLOCK_M, BLOCK_N) <- (BLOCK_M, BLOCK_K2) * (BLOCK_K2, BLOCK_N)
-                        imm_f16 = tkl.to_dtype(e_delta, tkl.f32) # : (BLOCK_M, BLOCK_K2)
+                        imm_f16 = tkl.to_dtype(e_delta, tkl.f16) # : (BLOCK_M, BLOCK_K2)
                         v = tkl.load(V, (b, h, k2, n), (BLOCK_K2, BLOCK_N)) 
-                        acc = tkl.dot(imm_f16, v, acc) # : (BLOCK_M, BLOCK_N)
+                        imm_f16_d = tkl.transpose(imm_f16, (1, 0))
+                        v_d = tkl.transpose(v, (1, 0))
+                        acc = tkl.transpose(acc, (1, 0))
+                        acc = tkl.dot(v_d, imm_f16_d, acc) # : (BLOCK_M, BLOCK_N)
+                        acc = tkl.transpose(acc, (1, 0))
 
                         return (m_j, d_j, acc)
 
                     max, sum, res = inner_body
-                    one = tkl.constant((BLOCK_M, BLOCK_N), tkl.f32, 1.0)
+                    one = tkl.constant((BLOCK_M,), tkl.f32, 1.0)
                     one_by_sum = one / sum
+                    one_by_sum = tkl.broadcast_in_dim(one_by_sum, (BLOCK_M, BLOCK_N), (1, ))
                     result = one_by_sum * res
                     tkl.store(O, (b, h, m, n), result)
 
