@@ -19,9 +19,9 @@ class Test(unittest.TestCase):
     def testBatchMatmul(self):
         @tk.gen.thread(B)
         def batch_matmul(
-            bA: tkl.InputBuffer[B, M, K, tkl.f32],
-            bB: tkl.InputBuffer[B, K, N, tkl.f32],
-            bC: tkl.OutputBuffer[B, M, N, tkl.f32],
+            bA: tkl.InputBuffer[B, M, K, tkl.f16],
+            bB: tkl.InputBuffer[B, K, N, tkl.f16],
+            bC: tkl.OutputBuffer[B, M, N, tkl.f16],
         ):
             # TODO: Naive mapping for now (1 along b per workgroup).
             # The goal is to use scf.forall mapping in the future and avoid having to think
@@ -47,16 +47,16 @@ class Test(unittest.TestCase):
                     return
                 return
 
-        tA = torch.randn(vB, vM, vK).to(torch.float32)
-        tB = torch.randn(vB, vK, vN).to(torch.float32)
-        tC = torch.zeros(vB, vM, vN).to(torch.float32)
+        tA = torch.randn(vB, vM, vK).to(torch.float16).cuda()
+        tB = torch.randn(vB, vK, vN).to(torch.float16).cuda()
+        tC = torch.zeros(vB, vM, vN).to(torch.float16).cuda()
 
         # TODO: (suggested by Kunwar) we could build a tk.gen.EagerLaunchContext to emit pytorch via tracing.
         # This would give us 2 intermediate testing points:
         #   1. Language traced -> PyTorch vs PyTorch reference implementation.
         #   2. Language traced -> MLIR vs Language traced -> PyTorch, potentially instruction by instruction.
         # This should be very useful for debugging and teaching purposes.
-        vBLOCK_M, vBLOCK_N, vBLOCK_K = 1, 1, 8
+        vBLOCK_M, vBLOCK_N, vBLOCK_K = 32, 32, 32
         assert vM % vBLOCK_M == 0, "only divisible sizes supported for now"
         assert vN % vBLOCK_N == 0, "only divisible sizes supported for now"
         assert vK % vBLOCK_K == 0, "only divisible sizes supported for now"
@@ -75,9 +75,9 @@ class Test(unittest.TestCase):
     def testBatchMatmulTranspose(self):
         @tk.gen.thread(B)
         def batch_matmul_transpose(
-            bA: tkl.InputBuffer[B, M, K, tkl.f32],
-            bB: tkl.InputBuffer[B, K, N, tkl.f32],
-            bC: tkl.OutputBuffer[N, B, M, tkl.f32],
+            bA: tkl.InputBuffer[B, M, K, tkl.f16],
+            bB: tkl.InputBuffer[B, K, N, tkl.f16],
+            bC: tkl.OutputBuffer[N, B, M, tkl.f16],
         ):
             # TODO: Naive mapping for now (1 along b per workgroup).
             # The goal is to use scf.forall mapping in the future and avoid having to think
@@ -104,16 +104,16 @@ class Test(unittest.TestCase):
                     return
                 return
 
-        tA = torch.randn(vB, vM, vK).to(torch.float32)
-        tB = torch.randn(vB, vK, vN).to(torch.float32)
-        tC = torch.zeros(vN, vB, vM).to(torch.float32)
+        tA = torch.randn(vB, vM, vK).to(torch.float16).cuda()
+        tB = torch.randn(vB, vK, vN).to(torch.float16).cuda()
+        tC = torch.zeros(vN, vB, vM).to(torch.float16).cuda()
 
         # TODO: (suggested by Kunwar) we could build a tk.gen.EagerLaunchContext to emit pytorch via tracing.
         # This would give us 2 intermediate testing points:
         #   1. Language traced -> PyTorch vs PyTorch reference implementation.
         #   2. Language traced -> MLIR vs Language traced -> PyTorch, potentially instruction by instruction.
         # This should be very useful for debugging and teaching purposes.
-        vBLOCK_B, vBLOCK_M, vBLOCK_N, vBLOCK_K = 1, 1, 1, 8
+        vBLOCK_B, vBLOCK_M, vBLOCK_N, vBLOCK_K = 1, 32, 32, 8
         assert vB % vBLOCK_B == 0, "only divisible sizes supported for now"
         assert vM % vBLOCK_M == 0, "only divisible sizes supported for now"
         assert vN % vBLOCK_N == 0, "only divisible sizes supported for now"

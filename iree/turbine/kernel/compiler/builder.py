@@ -307,6 +307,9 @@ class _ScalarBuilder:
     ) -> IRProxyValue:
         return IRProxyValue(arith_d.divf(lhs.ir_value, rhs.ir_value))
 
+    def unary_exp_float(self, val: IRProxyValue) -> IRProxyValue:
+        return IRProxyValue(math_d.exp(val.ir_value))
+
     def unary_exp2_float(self, val: IRProxyValue) -> IRProxyValue:
         return IRProxyValue(math_d.exp2(val.ir_value))
     

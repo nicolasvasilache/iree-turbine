@@ -355,6 +355,14 @@ class CompiledContext(BaseContext):
     ### ========================================================================
     ### Math Operations
     ### ========================================================================
+    def handle_exp(self, op, val):
+        return self.region_graph.create_proxy(
+            "call_function",
+            target=op,
+            args=(val,),
+            kwargs={},
+        )
+
     def handle_exp2(self, op, val):
         return self.region_graph.create_proxy(
             "call_function",

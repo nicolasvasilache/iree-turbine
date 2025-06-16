@@ -37,20 +37,17 @@ class Test(unittest.TestCase):
             # about mod and div mapping.
             b, h = tkl.program_id(0), tkl.program_id(1)
 
+            k1_val_f = tkl.constant((), tkl.f32, float(vK1))
+            one = tkl.constant((), tkl.f32, 1.0)
+            dk_sqrt = tkl.sqrt(one / k1_val_f)
+            # Multiply by scaling in f32 is more accurate.
+            # This could also be done ahead of time outside of the kernel.
+            qkT_scaling = tkl.broadcast_in_dim(dk_sqrt, (BLOCK_M, BLOCK_K2, ), (0, 1, ))
+
             # This is really a forall that later should get mapped.
             @tkl.for_loop(0, M, BLOCK_M, init_args=[])
             def body(m):
                 q = tkl.load(Q, (b, h, m, 0), (BLOCK_M, K1))
-
-                # TODO: how to splat a constant coming from a dim (i.e. K1; for now just use vK1)
-                # k1_val = tkl.constant((BLOCK_M, K1, ), tkl.i32, K1)
-                # k1_val_f = tkl.to_dtype(k1_val, tkl.f16)
-                k1_val_f = tkl.constant((BLOCK_M, K1, ), tkl.f16, float(vK1))
-                one = tkl.constant((BLOCK_M, K1, ), tkl.f16, 1.0)
-                dk_sqrt = tkl.sqrt(one / k1_val_f)
-                log2e = tkl.constant((BLOCK_M, K1, ), tkl.f16, vLOG2E)
-                qkv_scaling = log2e * dk_sqrt
-                q = q * qkv_scaling
 
                 # This is really a forall that later should get mapped.
                 @tkl.for_loop(0, N, BLOCK_N, init_args=[])
@@ -77,13 +74,14 @@ class Test(unittest.TestCase):
                         qkT_d = tkl.transpose(qkT, (1, 0))
                         qkT_d = tkl.dot(kT_d, q_d, qkT_d) # : (BLOCK_M, BLOCK_K2)
                         qkT = tkl.transpose(qkT_d, (1, 0))
+                        qkT = qkT * qkT_scaling
 
                         m_j = tkl.max(qkT, axis=1, acc=partial_max) # : (BLOCK_M)
-                        e_delta_max = tkl.exp2(partial_max - m_j) # : (BLOCK_M)
+                        e_delta_max = tkl.exp(partial_max - m_j) # : (BLOCK_M)
 
                         # TODO: are there better ways to do this (e.g. tkl.broadcast_to_typeof(partial_max)) ?
                         m_j_bcast = tkl.broadcast_in_dim(m_j, (BLOCK_M, BLOCK_K2), (1, )) # : (BLOCK_M, BLOCK_K2)
-                        e_delta = tkl.exp2(qkT - m_j_bcast) # : (BLOCK_M, BLOCK_K2)
+                        e_delta = tkl.exp(qkT - m_j_bcast) # : (BLOCK_M, BLOCK_K2)
                         e_init = e_delta_max * partial_sum # : (BLOCK_M)
                         d_j = tkl.sum(e_delta, axis=1, acc=e_init) # : (BLOCK_M)
 
@@ -119,10 +117,10 @@ class Test(unittest.TestCase):
         # N: target sequence length
         # K1: embedding dimension of key and query
         # K2: embedding dimension of value
-        Q = torch.randn(vB, vH, vM, vK1).to(torch.float32)
-        K = torch.randn(vB, vH, vK2, vK1).to(torch.float32)
-        V = torch.randn(vB, vH, vK2, vN).to(torch.float32)
-        O = torch.zeros(vB, vH, vM, vN).to(torch.float32)
+        Q = torch.randn(vB, vH, vM, vK1).to(torch.float16).cuda()
+        K = torch.randn(vB, vH, vK2, vK1).to(torch.float16).cuda()
+        V = torch.randn(vB, vH, vK2, vN).to(torch.float16).cuda()
+        O = torch.zeros(vB, vH, vM, vN).to(torch.float16).cuda()
 
         # TODO: (suggested by Kunwar) we could build a tk.gen.EagerLaunchContext to emit pytorch via tracing.
         # This would give us 2 intermediate testing points:
@@ -146,7 +144,8 @@ class Test(unittest.TestCase):
             ref = torch.nn.functional.scaled_dot_product_attention(
                 Q, K, V, attn_mask=None
             )
-            torch.testing.assert_close(O, ref)
+            epsilon = torch.finfo(torch.float16).eps
+            torch.testing.assert_close(O, ref, atol=epsilon, rtol=epsilon)
 
 
 if __name__ == "__main__":
