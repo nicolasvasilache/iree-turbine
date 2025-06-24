@@ -41,3 +41,7 @@ version_local.json
 
 # Output files
 out
+
+# temporary files in sandbox
+sandbox/nico/*npy
+sandbox/nico/*vmfb
