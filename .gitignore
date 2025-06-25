@@ -45,3 +45,4 @@ out
 # temporary files in sandbox
 sandbox/nico/*npy
 sandbox/nico/*vmfb
+sandbox/nico/trace
