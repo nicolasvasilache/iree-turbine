@@ -15,5 +15,9 @@ This was meant to be the entry point for tkl to connect to the `def generate`.
 
 Could also connect to instrinsics to get ggml-style Q5.
 
-Cross custom-op mechanism is better discussed through sharktank (@1:02:00)
+sharktank/models/llm/llm.py is a reimpl of LLM in PT that preconditions for IREE, uses turbine to trace etc
+
+@fxb.export_program like aot.exprt but with multiple entry points
+
+Cross custom-op mechanism is better discussed through sharktank (@1:02:00).
 """
