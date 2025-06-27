@@ -46,3 +46,8 @@ out
 sandbox/nico/*npy
 sandbox/nico/*vmfb
 sandbox/nico/trace
+sandbox/nico/*json
+sandbox/nico/*csv
+sandbox/nico/*db
+sandbox/nico/*txt
+sandbox/nico/*tracy
