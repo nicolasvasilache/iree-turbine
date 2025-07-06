@@ -139,11 +139,11 @@ def compile_and_run_on_gpu(asm: str, kernel_sig, args):
     run_vmfb(vmfb, kernel_sig, options, args)
 
 
-def thread(*symbolic_shape: IndexExpr):
+def thread(*symbolic_shape: IndexExpr, transform: Callable = None):
     GridType = Grid[symbolic_shape]
 
     def decorator(f: Callable) -> "LaunchableThread":
-        return LaunchableThread(GridType, f.__name__, f)
+        return LaunchableThread(GridType, f.__name__, f, transform)
 
     return decorator
 
@@ -154,12 +154,14 @@ class LaunchableThread(Launchable):
         grid_type: Type[Grid],
         name: str,
         eager_function: Callable,
+        transform: Callable = None
     ):
         super().__init__(eager_function)
         self.grid_type = grid_type
         self._name = name
         self._f = eager_function
         self._sig = inspect.signature(eager_function)
+        self.transform = transform
 
     def _trace(self) -> CapturedTrace:
         region_graph = KernelRegionGraph()
@@ -261,10 +263,13 @@ class LaunchableThread(Launchable):
                 )
                 # Attach as a func attr.
                 def_func_op.attributes["translation_info"] = translation_info
-                # Compile and run on GPU.
-                compile_and_run_on_gpu(mb.module_op.get_asm(), kernel_sig, args)
-        else: 
-            compile_and_run_on_cpu(mb.module_op.get_asm(), kernel_sig, args)
+        # If specified, transform application must occur here otherwise
+        # unexpected invalidations occur.
+        if self.transform:
+            self.transform(mb.module_op)
+            print(mb.module_op)
+        # Compile and run.
+        compile_and_run_on_gpu(mb.module_op.get_asm(), kernel_sig, args)
 
     def aot_execute(self, args, kwargs):
         launch_context = LaunchContext.current()

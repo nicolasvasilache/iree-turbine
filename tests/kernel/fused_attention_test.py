@@ -11,6 +11,9 @@ import torch
 import iree.turbine.kernel as tk
 import iree.turbine.kernel.lang as tkl
 
+from iree.compiler import ir
+from iree.compiler.dialects.transform import interpreter as transform_interpreter
+
 # B: batch size
 # H: num heads
 # M: source sequence length
@@ -23,9 +26,35 @@ BLOCK_M, BLOCK_N, BLOCK_K2 = tkl.sym.BLOCK_M, tkl.sym.BLOCK_N, tkl.sym.BLOCK_K2
 
 vLOG2E = 1.44269504089
 
+TRANSFORM_MODULE = """
+module attributes {transform.with_named_sequence} {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %producer = transform.structured.match ops{["vector.contract"]} in %module_op
+      : (!transform.any_op) -> !transform.any_op
+    %mma_attr = transform.param.constant #iree_gpu.mma_layout<MFMA_F32_32x32x8_F16> -> !transform.any_param
+    %2 = transform.iree.infer_and_attach_vector_contract_layout mma_attr(%mma_attr) to %producer
+      : (!transform.any_param, !transform.any_op) -> !transform.any_op
+    %func = transform.structured.match ops{["func.func"]} in %module_op
+      : (!transform.any_op) -> !transform.any_op
+    transform.iree.propagate_vector_distribution %func workgroup_size = [64, 1, 1] subgroup_size = 64
+      : !transform.any_op
+    transform.yield
+  }
+}
+"""
 class Test(unittest.TestCase):
     def testFusedAttention(self):
-        @tk.gen.thread(B, H)
+
+        def apply_transform(module: ir.Operation):
+            with module.context:
+                transform_module = ir.Module.parse(TRANSFORM_MODULE)
+                transform_interpreter.apply_named_sequence(
+                    module,
+                    transform_module.body.operations[0],
+                    transform_module,
+                )
+
+        @tk.gen.thread(B, H, transform=apply_transform)
         def fused_attention(
             Q: tkl.InputBuffer[B, H, M, K1, tkl.f16],
             K: tkl.InputBuffer[B, H, K2, K1, tkl.f16],
