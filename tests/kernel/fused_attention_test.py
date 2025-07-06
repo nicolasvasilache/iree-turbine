@@ -146,10 +146,10 @@ class Test(unittest.TestCase):
         # N: target sequence length
         # K1: embedding dimension of key and query
         # K2: embedding dimension of value
-        Q = torch.randn(vB, vH, vM, vK1).to(torch.float16).cuda()
-        K = torch.randn(vB, vH, vK2, vK1).to(torch.float16).cuda()
-        V = torch.randn(vB, vH, vK2, vN).to(torch.float16).cuda()
-        O = torch.zeros(vB, vH, vM, vN).to(torch.float16).cuda()
+        Q = torch.randn(vB, vH, vM, vK1).to(torch.float16)#.cuda()
+        K = torch.randn(vB, vH, vK2, vK1).to(torch.float16)#.cuda()
+        V = torch.randn(vB, vH, vK2, vN).to(torch.float16)#.cuda()
+        O = torch.zeros(vB, vH, vM, vN).to(torch.float16)#.cuda()
 
         # TODO: (suggested by Kunwar) we could build a tk.gen.EagerLaunchContext to emit pytorch via tracing.
         # This would give us 2 intermediate testing points:
