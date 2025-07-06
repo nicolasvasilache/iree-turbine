@@ -1,7 +1,8 @@
-from typing import Tuple
+from typing import Tuple, Union
 import typing
 
 if typing.TYPE_CHECKING:
+    from sympy import Symbol
     from ..lang.types import Vector
 
 from .base import (
@@ -29,4 +30,4 @@ def sqrt(val): ...
 
 
 @define_op
-def vector_constant(shape: Tuple[int, ...], dtype, value: int | float) -> "Vector": ...
+def vector_constant(shape: Tuple[Union[int, "Symbol"], ...], dtype, value: int | float) -> "Vector": ...

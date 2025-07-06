@@ -22,6 +22,7 @@ __all__ = [
     "for_loop",
     "load",
     "store",
+    "transfer_gather",
     "broadcast",
     "broadcast_in_dim",
     "transpose",
@@ -57,6 +58,7 @@ for_loop = ops.for_loop
 # Memory Operations
 load = ops.kernel_buffer_load
 store = ops.kernel_buffer_store
+transfer_gather = ops.kernel_buffer_transfer_gather
 
 # Shape Manipulation operations
 broadcast = ops.vector_broadcast

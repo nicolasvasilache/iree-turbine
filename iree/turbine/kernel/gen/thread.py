@@ -53,6 +53,7 @@ from ..wave.utils.run_utils import invoke_vmfb
 
 __all__ = [
     "thread",
+    "LaunchableThread",
 ]
 
 # The key name for GPUPipelineOptionsAttr in the translation info config dictionary.
@@ -203,22 +204,32 @@ class LaunchableThread(Launchable):
         kwargs,
         context: Optional[Context] = None,
         module_op: Optional[Operation] = None,
+        skip_argument_binding: bool = False,
     ):
+        """
+        Trace the function, generate MLIR and get the kernel signature.
+
+        Parameters
+        ==========
+
+        * skip_argument_binding: If True, skip binding arguments to the indexing context.
+        This is useful for testing purposes where we want to only emit the IR.
+        """
         # Trace the function.
         trace = self._trace()
         idxc = IndexingContext.current()
 
         sig = self._sig
-        bound = sig.bind(*args, *kwargs)
-        bound.apply_defaults()
-
-        for arg_name in list(bound.arguments.keys()):
-            arg_value = bound.arguments[arg_name]
-            param = sig.parameters[arg_name]
-            param_type = param.annotation
-            if isinstance(param_type, type) and issubclass(param_type, KernelBuffer):
-                assert isinstance(arg_value, torch.Tensor)
-                idxc.bind_shaped(arg_name, param_type, list(arg_value.shape))
+        if not skip_argument_binding:
+            bound = sig.bind(*args, *kwargs)
+            bound.apply_defaults()
+            for arg_name in list(bound.arguments.keys()):
+                arg_value = bound.arguments[arg_name]
+                param = sig.parameters[arg_name]
+                param_type = param.annotation
+                if isinstance(param_type, type) and issubclass(param_type, KernelBuffer):
+                    assert isinstance(arg_value, torch.Tensor)
+                    idxc.bind_shaped(arg_name, param_type, list(arg_value.shape))
 
         idxc.finalize()
 
@@ -267,8 +278,8 @@ class LaunchableThread(Launchable):
         # unexpected invalidations occur.
         if self.transform:
             self.transform(mb.module_op)
-            print(mb.module_op)
         # Compile and run.
+        # print(mb.module_op)
         compile_and_run_on_gpu(mb.module_op.get_asm(), kernel_sig, args)
 
     def aot_execute(self, args, kwargs):

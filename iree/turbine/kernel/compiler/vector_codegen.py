@@ -5,16 +5,21 @@ actual loads/stores/computes to local vectors using PyTorch tensor
 level operations executed as threads over a grid.
 """
 
-from typing import Any, Callable, Type, Optional, Sequence, Union, List
+import re
+from typing import Any, Callable, Type, Optional, Sequence, TypeVar, Union, List
+from typing import cast
 import types
 
 from dataclasses import dataclass
 import inspect
 import operator as py_operator
 
+from numpy import shape
 import torch
 import torch.fx as fx
 import torch.utils._pytree as pytree
+
+from iree.compiler.ir import OpResult
 
 from .._support.indexing import (
     IndexExpr,
@@ -504,6 +509,146 @@ def _(emitter: ThreadEmitter, node: fx.Node):
         in_bounds=[True for _ in range(insert_rank)],
     )
 
+@handle_op(tkl.transfer_gather)
+def _(emitter: ThreadEmitter, node: fx.Node):    
+    T = TypeVar('T')
+    def asserting_cast(t: Type[T], v: Any) -> T:
+        assert isinstance(v, t), f"expected {v} to be of type {t}"
+        return cast(T, v)
+    
+    def asserting_sequence_cast(t: Type[T], v: Any) -> Sequence[T]:
+        assert isinstance(v, (list, tuple)), f"expected {v} to be of type {list} or {tuple}"
+        assert all(isinstance(item, t) for item in v), f"expected all items in {v} to be of type {t}"
+        return cast(Sequence[T], v)
+
+    def get_mlir_value_of_fx_node(n : fx.Node) -> Value:
+        node_values = asserting_sequence_cast(Union[IRProxyValue, Value], emitter.lookup_node_values(n))
+        if len(node_values) != 1:
+            raise CodegenError(
+                f"Unsupported emitter.lookup_node_values of len != 1: {node_values}"
+            )
+        if isinstance(node_values[0], IRProxyValue):
+            return asserting_cast(Value, node_values[0].ir_value)
+        return asserting_cast(Value, node_values[0])
+
+    # Consider:
+    #                                                       %i %j %v  0  %c33
+    #   a = tkl.transfer_gather(A, (%i, %j, %vec, 0, %c33), (2, 3, 4, 8, 16))
+    # Output should be
+    #   multi_index  = [[%i, %i], [%vec[0], %vec[1], %vector_a[2], %vector_a[3]], [0, %c33]]
+    #   vector_shape = [  [1, 1],                                   [1, 1, 1, 1], [8,   16]]
+    #   offsets      = [  [0, 1],                                   [0, 0, 0, 0], [0,    0]]
+    # So then we can take the itertools.product and describe all the extractions.
+    def foo(multi_index: Sequence[Union[fx.Node, int]], vector_shape: Sequence[int]):
+        def is_vector_fun(v):
+            return isinstance(v, fx.Node) and \
+                isinstance(get_mlir_value_of_fx_node(v).type, VectorType)
+            
+        # 1. Which of the indices emit to MLIR vectors and which one is the last of them?
+        # We need to unroll across all dimensions [0 .. last_index].
+        indices = [i for i, x in enumerate(multi_index) if is_vector_fun(x)]
+        last_index = None if len(indices) == 0 else indices[-1]
+        if last_index is None:
+            return [multi_index, ], [[0] * len(vector_shape),], [vector_shape, ]
+        
+        # 2. Split the multi_index and vector_shape into two parts:
+        tail_multi_index, tail_vector_shape = \
+            multi_index[last_index + 1:], vector_shape[last_index + 1:]
+        assert len(tail_multi_index) == len(tail_vector_shape), \
+            f"Expected tail_multi_index and tail_vector_shape to have the same length, "\
+                "got {len(tail_multi_index)} and {len(tail_vector_shape)}"
+
+        index, offset = [], []
+        # 3. The first part is the multi_index and vector_shape up to the last index.
+        for mi, si in zip(multi_index[:last_index + 1], vector_shape[:last_index + 1]):
+            is_vector = is_vector_fun(mi)
+
+            subindex, suboffset = [], []
+            # 3.a. Leading positions that are not vector<index> are simply unrolled by 1.
+            if not is_vector:
+                for offset_value in range(si):
+                    subindex.append(mi)
+                    suboffset.append(offset_value)
+                index.append(subindex)
+                offset.append(suboffset)
+                continue
+
+            # 3.b. Vector indirections are flattened.
+            ir_value = get_mlir_value_of_fx_node(asserting_cast(fx.Node, mi))
+            ir_type = asserting_cast(VectorType, ir_value.type)
+            import numpy as np
+            rank = ir_type.rank
+            num_elements = np.prod(ir_type.shape)
+            for flat_index in range(num_elements):
+                # Convert flat index to multi-dimensional index
+                position = np.unravel_index(flat_index, ir_type.shape)
+                subindex.append([vector_d.extract(ir_value, static_position=position, dynamic_position=[]), ])
+                suboffset.append([0] * rank)
+            index.append(subindex)
+            offset.append(suboffset)
+        
+        if len(tail_multi_index) > 0:
+            index.append([list(tail_multi_index), ])
+            offset.append([[0] * len(tail_multi_index), ])
+
+        return index, offset, list(tail_vector_shape)
+
+
+    try:
+        kb, multi_index, vector_shape = node.args
+        kb = asserting_cast(fx.Node, kb)
+        multi_index = asserting_sequence_cast(Union[fx.Node, int], multi_index)
+        vector_shape = asserting_sequence_cast(int, cast_py_literal(emitter, vector_shape))
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    import itertools
+    tmp_index, tmp_offset, vector_slice_shape = foo(multi_index, vector_shape)
+    index, offset = list(itertools.product(*tmp_index)), list(itertools.product(*tmp_offset))
+    
+    resvals = []
+    kb_src, kb_ir_type, kb_py_type = cast_kernel_buffer(emitter, kb)
+    ref_shape = kb_py_type.symbolic_shape
+    element_type = kb_ir_type.element_type
+    for idx_list, offset_list in zip(index, offset):
+        multi_index = tuple(item for lst in idx_list for item in lst)
+        vec_offsets = tuple(item for lst in offset_list for item in lst)
+
+        slice_spec = cast_slice_spec(emitter, ref_shape, multi_index)
+        start_indices = extract_slice_starts(emitter, ref_shape, slice_spec)
+        vector_type = VectorType.get(vector_slice_shape, element_type)
+        
+        pad_attr = ScalarBuilder.zero_attr(element_type)
+        pad_value = arith_d.constant(element_type, pad_attr)
+        read = vector_d.transfer_read(
+            vector_type,
+            kb_src,
+            start_indices,
+            AffineMap.get_minor_identity(len(ref_shape), len(vector_slice_shape)),
+            pad_value,
+            in_bounds=[True for _ in range(len(vector_slice_shape))],
+        )
+        resvals.append(read)
+
+    # For the final result, we need to stack everything back into vector_shape
+    # Build the result vector<vector_shape x element_type>(zero)
+    vector_type = VectorType.get(vector_shape, element_type)
+    zero_attr = ScalarBuilder.zero_attr(element_type)
+    splat_attr = DenseElementsAttr.get_splat(vector_type, zero_attr)
+    result = arith_d.constant(vector_type, splat_attr)
+
+    # Compute the leading shape
+    delta = len(vector_shape) - len(vector_slice_shape)
+    leading_shape = vector_shape[:delta]
+    import numpy as np
+    num_elements = np.prod(leading_shape)
+
+    # Iteratively extract the values and insert them into the result vector.
+    for flat_index in range(num_elements):
+        position = np.unravel_index(flat_index, leading_shape)
+        result = vector_d.insert(resvals[flat_index], result, static_position=position, dynamic_position=[])
+    emitter.bind_node_proxy(node, IRProxyValue(result))
+
 
 ###############################################################################
 # Math Ops
@@ -971,6 +1116,7 @@ def cast_slice_spec(
       * elippsis (...) to indicate a space filling `slice()`
       * `IndexExpr` for a constant index value.
       * `IRProxyValue` containing a `SymIndex` for a dynamic index value.
+      * mlir `Value` containing a dynamic index
 
     The numpy page has a good description here:
         https://numpy.org/doc/1.26/user/basics.indexing.html
@@ -983,8 +1129,8 @@ def cast_slice_spec(
         py_slice_spec = (py_slice_spec,)
 
     # Rank normalize.
-    none_count = py_slice_spec.count(None)
-    ellipsis_count = py_slice_spec.count(...)
+    none_count = sum(x is None for x in py_slice_spec)
+    ellipsis_count = sum(... is None for x in py_slice_spec)
     if ellipsis_count == 1:
         # Expand by the original list of slices less any unit dim insertions.
         # If negative, this does nothing and will be caught later upon
@@ -1050,6 +1196,10 @@ def cast_index_value(
     of sympy expressions on symbols. Dynamic are computed in the IR in some
     fashion and are IRProxyValue with an py_value of type SymIndex.
     """
+    # Already materialized Value.
+    if isinstance(py_index, Value):
+        return py_index
+    
     # Static IndexExpr
     if isinstance(py_index, int):
         return index_expr(py_index)
@@ -1078,6 +1228,10 @@ def cast_dynamic_index_value(emitter: ThreadEmitter, py_index) -> IRProxyValue:
 
     If it was a static index, it will be materialized.
     """
+    # Already materialized Value.
+    if isinstance(py_index, Value):
+        return py_index
+
     py_index = cast_index_value(emitter, py_index)
     if isinstance(py_index, IRProxyValue):
         return py_index
@@ -1098,6 +1252,9 @@ def extract_slice_starts(
 ) -> list[Value]:
     def _extract(i):
         atom = slice_spec[i]
+        # Already materialized Value.
+        if isinstance(atom, Value):
+            return atom
         if atom is None:
             return ScalarBuilder.constant(0, IndexType.get())
         elif isinstance(atom, slice):

@@ -323,6 +323,14 @@ class CompiledContext(BaseContext):
             kwargs={},
         )
 
+    def handle_kernel_buffer_transfer_gather(self, op, kernel_buffer, multi_index, shape):
+        return self.region_graph.create_proxy(
+            "call_function",
+            target=op,
+            args=(kernel_buffer, multi_index, shape),
+            kwargs={},
+        )
+
     ### ========================================================================
     ### Control Flow Operations
     ### ========================================================================
