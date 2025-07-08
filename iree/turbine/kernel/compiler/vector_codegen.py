@@ -11,7 +11,6 @@ from typing import cast
 import types
 
 from dataclasses import dataclass
-import inspect
 import operator as py_operator
 
 from numpy import shape
@@ -111,12 +110,20 @@ class ThreadEmitter:
 
     OP_HANDLERS: dict[Any, Callable[["ThreadEmitter", fx.Node], None]] = {}
 
-    def __init__(self, root_sig: BoundKernelSignature, trace: CapturedTrace):
+    def __init__(self, root_sig: BoundKernelSignature, trace: CapturedTrace, dynamic_symbols: List[IndexSymbol] = []):
         self._node_values: dict[fx.Node, List[IRProxyValue]] = {}
         self._grid_axis_values: dict[int, IRProxyValue] = {}
         self._root_sig = root_sig
         self.trace = trace
         self.ip = InsertionPoint(root_sig.entry_block)
+
+        # Bind the dynamic_symbols to the IREE ABI-compatible index bbargs.
+        # self.dynamic_symbols = dynamic_symbols
+        self.dynamic_dims: dict[IndexSymbol, Value] = {}
+        symbol_iterator = iter(dynamic_symbols)
+        for arg in self._root_sig.entry_block.arguments:
+            if isinstance(arg.type, IndexType):
+                self.dynamic_dims[next(symbol_iterator)] = arg
 
     def lookup_node_values(self, node: fx.Node) -> List[Value]:
         assert NDEBUG or isinstance(node, fx.Node)
@@ -994,13 +1001,16 @@ def cast_py_value(
             raise CodegenError(f"Producer node `{value}` has no IR Value")
     elif isinstance(value, IndexExpr):
         simplified = IndexingContext.current().simplify_expr(value)
-        try:
-            value = int(simplified)
-        except TypeError as e:
-            raise CodegenError(
-                f"Dynamically resolved symbolic values not yet implemented. Got: "
-                f"{simplified}"
-            ) from e
+        if isinstance(simplified, IndexSymbol) and simplified in emitter.dynamic_dims:
+            return IRProxyValue(emitter.dynamic_dims[simplified])
+        else:
+            try:
+                value = int(simplified)
+            except:
+                raise CodegenError(
+                    f"Dynamically resolved symbolic values not yet implemented. Got: "
+                    f"{simplified} of type {type(simplified)}"
+                )
     element_type = IndexType.get() if element_type is None else element_type
     return ScalarBuilder.constant(value, element_type)
 

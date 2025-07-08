@@ -32,7 +32,7 @@ from .._support.tracing import (
     AOTLaunchContext,
 )
 
-from .._support.indexing import IndexingContext
+from .._support.indexing import IndexingContext, IndexSymbol
 
 from ..compiler import (
     kernel_codegen,
@@ -205,6 +205,7 @@ class LaunchableThread(Launchable):
         context: Optional[Context] = None,
         module_op: Optional[Operation] = None,
         skip_argument_binding: bool = False,
+        dynamic_symbols: list[IndexSymbol] = [],
     ):
         """
         Trace the function, generate MLIR and get the kernel signature.
@@ -242,12 +243,12 @@ class LaunchableThread(Launchable):
         mb = builder.ModuleBuilder(context=context, module_op=module_op)
         entrypoint_name = self._name
         exe = dispatch_codegen.StreamExecutable(mb, name=entrypoint_name)
-        dispatch_entrypoint = exe.define_entrypoint(entrypoint_name, kernel_sig, grid)
+        dispatch_entrypoint = exe.define_entrypoint(entrypoint_name, kernel_sig, grid, dynamic_symbols=dynamic_symbols)
         emitter = vector_codegen.ThreadEmitter(dispatch_entrypoint, trace)
         emitter.emit()
         emitter.finish()
 
-        # print(mb.module_op)
+        print(mb.module_op)
         mb.module_op.verify()
 
         return mb, exe, kernel_sig, entrypoint_name
