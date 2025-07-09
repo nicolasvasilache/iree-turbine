@@ -574,8 +574,8 @@ def _(emitter: ThreadEmitter, node: fx.Node):
             # 3.a. Leading positions that are not vector<index> are simply unrolled by 1.
             if not is_vector:
                 for offset_value in range(si):
-                    subindex.append(mi)
-                    suboffset.append(offset_value)
+                    subindex.append([mi])
+                    suboffset.append([offset_value])
                 index.append(subindex)
                 offset.append(suboffset)
                 continue
@@ -619,6 +619,7 @@ def _(emitter: ThreadEmitter, node: fx.Node):
     element_type = kb_ir_type.element_type
     for idx_list, offset_list in zip(index, offset):
         multi_index = tuple(item for lst in idx_list for item in lst)
+        # TODO: add vec_offsets!!
         vec_offsets = tuple(item for lst in offset_list for item in lst)
 
         slice_spec = cast_slice_spec(emitter, ref_shape, multi_index)

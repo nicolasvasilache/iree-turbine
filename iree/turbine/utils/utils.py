@@ -38,7 +38,7 @@ module attributes {transform.with_named_sequence} {
     transform.apply_patterns to %func {
       transform.apply_patterns.canonicalization
     } : !transform.any_op
-    transform.apply_cse to %func : !transform.any_op
+    // transform.apply_cse to %func : !transform.any_op
     transform.yield
   }
 }
